@@ -3,47 +3,70 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Hub Key 管理</title>
+  <meta name="color-scheme" content="dark">
+  <title>ZP Hub · 访问凭证</title>
   <link rel="stylesheet" href="keys.css">
   <script src="keys.js" defer></script>
 </head>
 <body>
 <main>
-  <h1>Hub Key 管理</h1>
-  <p>使用现有 zp-b 账号。登录凭证只保留在本页内存，Key 仅在创建时展示，请自行妥善保存。</p>
-  <form id="login">
-    <label>账号<input name="account" autocomplete="username" required minlength="3" maxlength="100"></label>
-    <label>密码<input name="password" type="password" autocomplete="current-password" required minlength="6" maxlength="100"></label>
-    <label class="inline"><input name="admin" type="checkbox">后台管理员</label>
-    <button>登录</button>
-  </form>
-  <section id="controls" hidden>
-    <button id="refresh">刷新权益</button>
-    <button id="logout">退出本页</button>
-    <div id="member" hidden>
-      <button id="claim">领取会员 Key</button>
-      <button id="reset">重置会员 Key</button>
-      <p>重置会立即使旧 Key 和旧会话失效。原明文 Key 遗失后，请使用重置。</p>
+  <header class="topbar">
+    <a class="brand" href="#"><span class="brand-mark">ZP</span><span>ZP HUB <small>ACCESS CONSOLE</small></span></a>
+    <span class="node"><span></span> 国内节点</span>
+  </header>
+  <section class="intro">
+    <p class="eyebrow">YOUR ACCESS, IN ONE PLACE</p>
+    <h1>访问凭证<span>，简单一点。</span></h1>
+    <p>领取你的 Key，连接游戏内 Hub。已有会员权益，无需重复购买。</p>
+  </section>
+  <div class="workspace">
+    <div class="main-column">
+      <form id="login" class="surface">
+        <div class="section-title"><span class="step">01</span><div><h2>登录你的账号</h2><p>使用现有 zp-b 账号，凭证仅保留在本页内存。</p></div></div>
+        <label>账号<input name="account" autocomplete="username" required minlength="3" maxlength="100" placeholder="请输入账号"></label>
+        <label>密码<input name="password" type="password" autocomplete="current-password" required minlength="6" maxlength="100" placeholder="请输入密码"></label>
+        <label class="inline"><input name="admin" type="checkbox">管理员兼容登录</label>
+        <button class="primary full">登录并查看权益 <span aria-hidden="true">→</span></button>
+        <p class="hint">管理员日常发放与吊销，请使用 zldelf-admin → Hub 授权。</p>
+      </form>
+      <section id="controls" class="surface" hidden>
+        <div class="section-title"><span class="step">01</span><div><h2>管理访问凭证</h2><p>授权由服务端校验，新设备登录会终止旧会话。</p></div></div>
+        <div class="toolbar"><button id="refresh">刷新权益</button><button id="logout" class="quiet">退出本页</button></div>
+        <div id="member" hidden>
+          <div class="benefit"><span class="benefit-mark">VIP</span><div><h3>一个 Key，连接全部游戏</h3><p>有效期随你的会员权益同步。</p></div></div>
+          <button id="claim" class="primary">领取会员 Key</button><button id="reset">重置会员 Key</button>
+          <p class="hint">重置会立即终止旧 Key 和会话；原明文遗失后请使用重置。</p>
+        </div>
+        <form id="issue" class="operation" hidden>
+          <label>选择游戏<select name="gameId" required></select></label>
+          <button class="primary">发放单游戏 30 天 Key</button>
+          <p class="hint">首次激活开始计时，重复登录不延长有效期。</p>
+        </form>
+        <form id="revoke" class="operation" hidden>
+          <label>权益 ID<input name="id" required maxlength="36" placeholder="粘贴待吊销的权益 ID"></label>
+          <button class="danger">吊销权益及其会话</button>
+        </form>
+      </section>
+      <p id="status" class="status" role="status" aria-live="polite">登录后查看已有权益，或领取新的访问凭证。</p>
+      <section id="issued" class="surface issued" hidden>
+        <div class="section-title"><span class="step">✓</span><div><h2>Key 已就绪</h2><p>明文仅展示本次，关闭前请复制并妥善保存。</p></div></div>
+        <label>你的访问凭证<textarea id="key" readonly rows="3" spellcheck="false" aria-label="新生成的 Key"></textarea></label>
+        <button id="copy" class="primary">复制 Key</button><button id="clear" class="quiet">清除展示</button>
+      </section>
     </div>
-    <form id="issue" hidden>
-      <label>游戏<select name="gameId" required></select></label>
-      <button>发放单游戏 30 天 Key</button>
-    </form>
-    <form id="revoke" hidden>
-      <label>权益 ID<input name="id" required maxlength="36"></label>
-      <button>吊销权益及其会话</button>
-    </form>
+    <aside class="surface guide">
+      <p class="eyebrow">QUICK START</p><h2>从这里，进入游戏。</h2>
+      <ol><li><b>登录并领取</b><span>会员 Key 覆盖全部游戏，单游戏 Key 对应指定游戏。</span></li><li><b>填写 HUB_KEY</b><span>在运行入口前设置你的 Key，不要向其他人分享。</span></li><li><b>启动 ZP Hub</b><span>游戏自动识别，当前游戏的脚本优先展示。</span></li></ol>
+      <a class="loader-link" href="https://github.com/evennext333-ai/zp-hub/releases/latest/download/loader.lua">获取 GitHub 加载器 <span aria-hidden="true">↗</span></a>
+      <a class="backup-link" href="loader.lua">国内备用入口 ↗</a>
+      <p class="hint">Key 不放进网址；退出本页会清除本页凭证。</p>
+    </aside>
+  </div>
+  <section class="surface history">
+    <div class="history-heading"><div><p class="eyebrow">ENTITLEMENTS</p><h2>权益记录</h2></div><span class="pill" id="record-count">尚未登录</span></div>
+    <div id="records" class="records">登录后，你的权益记录会显示在这里。</div>
   </section>
-  <p id="status" role="status" aria-live="polite"></p>
-  <section id="issued" hidden>
-    <label>新 Key<textarea id="key" readonly rows="3" spellcheck="false"></textarea></label>
-    <button id="copy">复制 Key</button>
-    <button id="clear">清除展示</button>
-  </section>
-  <h2>权益记录</h2>
-  <pre id="records">请先登录</pre>
-  <p>统一加载入口：<a href="https://github.com/evennext333-ai/zp-hub/releases/latest/download/loader.lua">GitHub loader.lua</a> · <a href="loader.lua">国内备用入口</a></p>
-  <p>构建工具：Based on Prometheus by Elias Oelschner, <a href="https://github.com/prometheus-lua/Prometheus">https://github.com/prometheus-lua/Prometheus</a></p>
+  <footer><span>ZP HUB · 轻量连接，专注游戏</span><span>构建工具：<a href="https://github.com/prometheus-lua/Prometheus">Prometheus · Elias Oelschner</a></span></footer>
 </main>
 </body>
 </html>

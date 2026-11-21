@@ -63,6 +63,14 @@ HUB_TEST_LOADER=/tmp/zp-hub-assets-obfuscated-1.0.0/loader.lua \
 
 变量重命名、字符串和常量变换不启用 VM 或反调试。混淆失败即构建失败，不回退为明文公开附件。构建目录中的 Key 页面、API 地址和完整性元数据均是公开信息，不包含用户凭据。
 
+## 统一界面与 Key 管理
+
+游戏内 Hub 与 Key 自助网页使用统一的深色、青绿色强调及卡片式布局。游戏内保留自动识别排序、搜索、Key 校验、停止、退出、收起恢复和全部租约清理逻辑；窄屏通过滚动访问完整内容。 无正文的 GET/DELETE 请求不再声明 JSON Content-Type，避免服务器按空 JSON 正文拒收；接口路径及授权语义保持原样。
+
+管理员日常 Key 查询、单游戏发放和权益吊销已接入现有 `/Users/lvjunling/work_space/flutter/persor/zldelf-admin` 的「Hub 授权」页面（`/hub/keys`），直接复用后台登录态，不单独登录。
+
+本仓库 Key 网页保留为会员自助与旧链接兼容入口，会员领取/重置仍使用用户端登录态；管理员 JWT 不代替会员授权。网页权益改为可读卡片，服务端文本只作为文本节点渲染；明文 Key 仍仅在生成时显示，不写本地存储。管理后台页面详见 `/Users/lvjunling/work_space/flutter/persor/zldelf-admin/docs/hub-keys.md`。
+
 ## 独立部署，只依赖现有 API
 
 Hub 的目录和脚本内容直接来自后端原脚本大厅数据库，不读取游戏仓库，也没有脚本打包、上传发布目录的步骤。配置、上架或修改脚本通过原脚本大厅管理 API 完成。Hub 继续请求 `/api/hub/catalog` 和鉴权后的 `/api/hub/scripts/:id/load`，响应字段和授权协议保持原样。

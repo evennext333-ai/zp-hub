@@ -114,6 +114,20 @@ end
 local client = luau.load(fs.readFile(process.env.HUB_TEST_LOADER or "src/client.lua"), { environment = environment })
 client()
 assert(hubEnv.HUB_KEY == nil, "外部 Key 使用后应清理")
+local panel, search
+for _, item in ipairs(objects) do
+    if item.ClassName == "ScrollingFrame" and item.Parent and item.Parent.ClassName == "ScreenGui" then panel = item end
+    if item.PlaceholderText == "搜索脚本名称、别名或标签…" then search = item end
+end
+assert(panel and search, "新版面板与搜索入口存在")
+panel.AbsoluteSize = rb.Vector2.new(340, 300)
+panel:GetPropertyChangedSignal("AbsoluteSize"):Fire()
+assert(panel.CanvasSize.Y.Offset >= 590, "窄屏保留完整可滚动内容")
+search.Text = "没有这个脚本"
+search:GetPropertyChangedSignal("Text"):Fire()
+assert(find("没有匹配的脚本").Visible ~= false, "无结果时展示空状态")
+search.Text = ""
+search:GetPropertyChangedSignal("Text"):Fire()
 find("校验 Key").Activated:Fire()
 task.wait(0.05)
 assert(counter.logins == 1)

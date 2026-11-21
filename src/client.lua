@@ -35,55 +35,90 @@ local function object(className, properties, parent)
     item.Parent = parent
     return item
 end
+local colors = {
+    canvas = Color3.fromRGB(16, 23, 31), surface = Color3.fromRGB(24, 33, 43),
+    border = Color3.fromRGB(47, 61, 74), text = Color3.fromRGB(238, 244, 247),
+    muted = Color3.fromRGB(154, 174, 188), accent = Color3.fromRGB(99, 225, 196),
+    ink = Color3.fromRGB(14, 42, 37),
+}
+local function rounded(item, radius)
+    object("UICorner", { CornerRadius = UDim.new(0, radius or 10) }, item)
+    return item
+end
+local function outline(item, color)
+    object("UIStroke", { Color = color or colors.border, Thickness = 1, ApplyStrokeMode = Enum.ApplyStrokeMode.Border }, item)
+end
+local function text(parent, value, x, y, width, height, size, color)
+    return object("TextLabel", {
+        Position = UDim2.fromOffset(x, y), Size = UDim2.new(1, width, 0, height),
+        BackgroundTransparency = 1, Text = value, TextColor3 = color or colors.text,
+        Font = Enum.Font.Gotham, TextSize = size or 14, TextWrapped = true,
+        TextXAlignment = Enum.TextXAlignment.Left,
+    }, parent)
+end
 local gui = object("ScreenGui", { Name = "RSZH_Hub", ResetOnSpawn = false, ZIndexBehavior = Enum.ZIndexBehavior.Sibling }, guiParent)
 uiContext.onCleanup(function() gui:Destroy() end)
-local panel = object("ScrollingFrame", {
+local panel = rounded(object("ScrollingFrame", {
     AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
-    Size = UDim2.new(0.92, 0, 0.85, 0), BackgroundColor3 = Color3.fromRGB(20, 25, 36),
-    CanvasSize = UDim2.fromOffset(0, 438), AutomaticCanvasSize = Enum.AutomaticSize.Y, Visible = true,
-    ScrollBarThickness = 4, BorderSizePixel = 0,
-}, gui)
-object("UISizeConstraint", { MaxSize = Vector2.new(620, 560) }, panel)
-object("UICorner", { CornerRadius = UDim.new(0, 12) }, panel)
-local function label(text, y, height)
-    return object("TextLabel", {
-        Position = UDim2.new(0, 16, 0, y), Size = UDim2.new(1, -32, 0, height),
-        BackgroundTransparency = 1, Text = text, TextColor3 = Color3.fromRGB(230, 235, 245),
-        TextSize = 16, TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Left,
-    }, panel)
-end
-label("脚本 Hub · 国内版", 10, 30)
-label("当前游戏 " .. tostring(game.GameId) .. " / 地图 " .. tostring(game.PlaceId), 44, 28)
-local status = label("正在获取正式目录…", 78, 60)
-local function input(placeholder, y)
-    return object("TextBox", {
-        Position = UDim2.new(0, 16, 0, y), Size = UDim2.new(1, -32, 0, 38),
-        BackgroundColor3 = Color3.fromRGB(34, 42, 58), TextColor3 = Color3.new(1, 1, 1),
-        PlaceholderColor3 = Color3.fromRGB(170, 181, 200), TextSize = 16,
+    Size = UDim2.new(0.92, 0, 0.88, 0), BackgroundColor3 = colors.canvas,
+    CanvasSize = UDim2.fromOffset(0, 600), AutomaticCanvasSize = Enum.AutomaticSize.Y, Visible = true,
+    ScrollBarThickness = 3, ScrollBarImageColor3 = colors.border, BorderSizePixel = 0,
+}, gui), 16)
+outline(panel)
+object("UISizeConstraint", { MaxSize = Vector2.new(720, 640) }, panel)
+rounded(object("TextLabel", {
+    Position = UDim2.fromOffset(22, 22), Size = UDim2.fromOffset(42, 42),
+    BackgroundColor3 = colors.accent, Text = "ZP", Font = Enum.Font.GothamBold,
+    TextColor3 = colors.ink, TextSize = 18,
+}, panel))
+text(panel, "ZP HUB", 78, 18, -100, 28, 22)
+text(panel, "你的游戏脚本库 · 国内节点", 78, 47, -100, 20, 12, colors.muted)
+text(panel, "自动识别游戏  /  " .. tostring(game.GameId) .. "  ·  地图 " .. tostring(game.PlaceId), 22, 82, -44, 24, 12, colors.muted)
+local authorization = rounded(object("Frame", {
+    Position = UDim2.fromOffset(20, 120), Size = UDim2.new(1, -40, 0, 152),
+    BackgroundColor3 = colors.surface, BorderSizePixel = 0,
+}, panel), 12)
+outline(authorization)
+text(authorization, "访问授权", 16, 10, -32, 24, 14)
+local status = text(authorization, "正在获取正式目录…", 16, 38, -32, 50, 13, colors.muted)
+local function input(parent, placeholder, position, size)
+    local field = rounded(object("TextBox", {
+        Position = position, Size = size, BackgroundColor3 = colors.canvas,
+        TextColor3 = colors.text, PlaceholderColor3 = colors.muted,
+        Font = Enum.Font.Gotham, TextSize = 14, TextXAlignment = Enum.TextXAlignment.Left,
         PlaceholderText = placeholder, Text = "", ClearTextOnFocus = false,
-    }, panel)
+    }, parent), 8)
+    object("UIPadding", { PaddingLeft = UDim.new(0, 12), PaddingRight = UDim.new(0, 12) }, field)
+    outline(field, Color3.fromRGB(82, 103, 121))
+    return field
 end
-local keyBox = input(pendingKey ~= "" and "已读取外部 Key" or "输入 Key 或设置 HUB_KEY", 144)
-local searchBox = input("搜索名称、别名或标签", 238)
-local function button(text, x, width)
-    return object("TextButton", {
-        Position = UDim2.new(x, 16, 0, 192), Size = UDim2.new(width, -24, 0, 36),
-        BackgroundColor3 = Color3.fromRGB(47, 82, 140), TextColor3 = Color3.new(1, 1, 1),
-        TextSize = 15, Text = text, Selectable = true,
-    }, panel)
+local function button(parent, value, position, size, primary)
+    local item = rounded(object("TextButton", {
+        Position = position, Size = size, BackgroundColor3 = primary and colors.accent or colors.surface,
+        TextColor3 = primary and colors.ink or colors.text, Font = Enum.Font.GothamMedium,
+        TextSize = 13, Text = value, Selectable = true, AutoButtonColor = true, BorderSizePixel = 0,
+    }, parent), 8)
+    if not primary then outline(item) end
+    return item
 end
-local loginButton, stopButton, exitButton = button("校验 Key", 0, 1/3), button("停止脚本", 1/3, 1/3), button("退出 Hub", 2/3, 1/3)
-local toggle = object("TextButton", {
-    Position = UDim2.new(1, -128, 0, 12), Size = UDim2.fromOffset(116, 38),
-    BackgroundColor3 = Color3.fromRGB(47, 82, 140), TextColor3 = Color3.new(1, 1, 1),
-    TextSize = 16, Text = "收起 Hub", Selectable = true,
-}, gui)
+local keyBox = input(authorization, pendingKey ~= "" and "已读取外部 Key" or "输入 Key 或设置 HUB_KEY", UDim2.fromOffset(16, 100), UDim2.new(1, -148, 0, 44))
+local loginButton = button(authorization, "校验 Key", UDim2.new(1, -116, 0, 100), UDim2.fromOffset(100, 44), true)
+local searchBox = input(panel, "搜索脚本名称、别名或标签…", UDim2.fromOffset(20, 292), UDim2.new(1, -40, 0, 44))
+text(panel, "脚本库", 22, 347, -150, 24, 15)
+local countLabel = text(panel, "正在同步", 22, 347, -44, 24, 12, colors.muted)
+countLabel.TextXAlignment = Enum.TextXAlignment.Right
 local list = object("ScrollingFrame", {
-    Position = UDim2.new(0, 16, 0, 288), Size = UDim2.new(1, -32, 0, 140),
-    BackgroundTransparency = 1, BorderSizePixel = 0, ScrollBarThickness = 6,
-    AutomaticCanvasSize = Enum.AutomaticSize.Y, CanvasSize = UDim2.new(),
+    Position = UDim2.fromOffset(20, 382), Size = UDim2.new(1, -40, 0, 170),
+    BackgroundTransparency = 1, BorderSizePixel = 0, ScrollBarThickness = 3,
+    ScrollBarImageColor3 = colors.border, AutomaticCanvasSize = Enum.AutomaticSize.Y, CanvasSize = UDim2.new(),
 }, panel)
-object("UIListLayout", { Padding = UDim.new(0, 8), SortOrder = Enum.SortOrder.LayoutOrder }, list)
+object("UIListLayout", { Padding = UDim.new(0, 10), SortOrder = Enum.SortOrder.LayoutOrder }, list)
+local emptyLabel = text(list, "没有匹配的脚本\n试试其他名称或标签", 0, 0, -8, 96, 14, colors.muted)
+emptyLabel.Visible = false
+emptyLabel.TextXAlignment = Enum.TextXAlignment.Center
+local stopButton = button(panel, "停止脚本", UDim2.fromOffset(20, 576), UDim2.new(0.5, -26, 0, 44))
+local exitButton = button(panel, "退出 Hub", UDim2.new(0.5, 6, 0, 576), UDim2.new(0.5, -26, 0, 44))
+local toggle = button(gui, "收起 Hub", UDim2.new(1, -132, 0, 16), UDim2.fromOffset(116, 44))
 local cards = {}
 owner.focus = function() gui.Enabled = true panel.Visible = true toggle.Text = "收起 Hub" end
 env.__RSZH_HUB = owner
@@ -95,7 +130,11 @@ local function connect(signal, callback)
     uiContext.onCleanup(function() connection:Disconnect() end)
 end
 local function fitList()
-    list.Size = UDim2.new(1, -32, 0, math.max(140, panel.AbsoluteSize.Y - 304))
+    local height = math.max(140, panel.AbsoluteSize.Y - 456)
+    list.Size = UDim2.new(1, -40, 0, height)
+    stopButton.Position = UDim2.fromOffset(20, 398 + height)
+    exitButton.Position = UDim2.new(0.5, 6, 0, 398 + height)
+    panel.CanvasSize = UDim2.fromOffset(0, 454 + height)
 end
 connect(panel:GetPropertyChangedSignal("AbsoluteSize"), fitList)
 fitList()
@@ -103,8 +142,8 @@ connect(toggle.Activated, function()
     panel.Visible = not panel.Visible
     toggle.Text = panel.Visible and "收起 Hub" or "打开 Hub"
 end)
-local function setStatus(text)
-    if owner.alive then status.Text = text end
+local function setStatus(value)
+    if owner.alive then status.Text = value end
 end
 local function stopScript()
     local running = current
@@ -223,17 +262,27 @@ local function render()
     local filtered = Runtime.search(catalog, searchBox.Text, game.GameId, game.PlaceId)
     for index, script in ipairs(filtered) do
         local rank = Runtime.rank(script, game.GameId, game.PlaceId)
-        local prefix = rank == 0 and "当前游戏 · " or (script.universal and "通用 · " or "")
-        local card = object("TextButton", {
-            Size = UDim2.new(1, -8, 0, 56), LayoutOrder = index, TextSize = 16,
-            TextColor3 = script.enabled and Color3.new(1, 1, 1) or Color3.fromRGB(160, 170, 190),
-            BackgroundColor3 = Color3.fromRGB(34, 42, 58), TextWrapped = true,
-            Text = prefix .. script.nameZh .. (script.enabled and "  · 加载" or "  · 待适配"),
-            Selectable = true,
-        }, list)
+        local category = rank == 0 and "当前游戏" or (script.universal and "通用脚本" or "其他游戏")
+        local card = rounded(object("TextButton", {
+            Size = UDim2.new(1, -8, 0, 76), LayoutOrder = index,
+            Text = script.nameZh, TextTransparency = 1, Selectable = true, AutoButtonColor = true,
+            BackgroundColor3 = colors.surface, BorderSizePixel = 0,
+        }, list), 10)
+        outline(card, rank == 0 and colors.accent or colors.border)
+        local title = text(card, script.nameZh, 16, 10, -132, 26, 15, script.enabled and colors.text or colors.muted)
+        title.TextWrapped = false
+        title.TextTruncate = Enum.TextTruncate.AtEnd
+        local details = category .. (#(script.tags or {}) > 0 and "  ·  " .. table.concat(script.tags, " / ") or "")
+        local caption = text(card, details, 16, 40, -132, 20, 12, colors.muted)
+        caption.TextWrapped = false
+        caption.TextTruncate = Enum.TextTruncate.AtEnd
+        local action = text(card, script.enabled and "加载  →" or "待适配", 0, 0, -16, 76, 13, script.enabled and colors.accent or colors.muted)
+        action.TextXAlignment = Enum.TextXAlignment.Right
         card.Activated:Connect(function() task.spawn(run, script) end)
         table.insert(cards, card)
     end
+    countLabel.Text = tostring(#filtered) .. " 个脚本 · 当前游戏优先"
+    emptyLabel.Visible = #filtered == 0
     if #filtered == 0 then setStatus("没有匹配的脚本") end
 end
 

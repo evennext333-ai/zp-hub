@@ -11,6 +11,7 @@ test('Key page empty-body actions omit JSON Content-Type', async () => {
     if (!nodes.has(id)) nodes.set(id, {
       value: '', elements: {}, listeners: {},
       addEventListener(name, callback) { this.listeners[name] = callback; },
+      replaceChildren() {},
     });
     return nodes.get(id);
   }
@@ -110,7 +111,8 @@ test('Key page actions against isolated real API', { skip: !origin }, async () =
   elements.issue.fire('submit'); await settle();
   const gameKey = elements.key.value;
   assert.match(gameKey, /^RSH_[A-Za-z0-9_-]{43}$/);
-  const licenseId = JSON.parse(elements.records.textContent).find((item) => item.keys.some((key) => gameKey.startsWith(key.prefix))).id;
+  const licenseId = /权益 ID：([0-9a-f-]{36})/i.exec(elements.status.textContent)?.[1];
+  assert.ok(licenseId, '发放成功后展示权益 ID');
   const a = await api('/api/hub/sessions', null, { key: gameKey, hwid: 'device-a', requestId: randomUUID() });
   const b = await api('/api/hub/sessions', null, { key: gameKey, hwid: 'device-a', requestId: randomUUID() });
   assert.equal(a.status, 200); assert.equal(b.status, 200);
@@ -135,4 +137,36 @@ test('Key page actions against isolated real API', { skip: !origin }, async () =
   assert.equal(elements.key.value, '');
   elements.logout.fire('click');
   assert.equal(elements.controls.hidden, true);
+});
+
+test('Key records use text nodes and preserve membership status semantics', async () => {
+  const nodes = new Map(), button = { disabled: false };
+  function node() {
+    return { textContent: '', elements: {}, children: [], listeners: {},
+      addEventListener(name, callback) { this.listeners[name] = callback; },
+      append(child) { this.children.push(child); }, replaceChildren() { this.children = []; this.textContent = ''; } };
+  }
+  const element = (id) => { if (!nodes.has(id)) nodes.set(id, node()); return nodes.get(id); };
+  let rows = [{ id: '<script>fixture</script>', kind: 'GAME', gameId: '<img src=x>', activatedAt: null, expiresAt: null, revokedAt: null },
+    { id: 'member-fixture', kind: 'MEMBER', gameId: null, expiresAt: '2000-01-01', revokedAt: null }];
+  const context = vm.createContext({
+    document: { getElementById: element, querySelectorAll: () => [button], createElement: node }, AbortSignal,
+    fetch: async () => ({ ok: true, json: async () => ({ success: true, data: rows }) }),
+  });
+  vm.runInContext(readFileSync(new URL('../src/keys.js', import.meta.url), 'utf8'), context);
+  async function refresh() {
+    element('refresh').listeners.click();
+    for (let i = 0; i < 50 && button.disabled; i++) await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(button.disabled, false);
+  }
+  await refresh();
+  assert.equal(element('records').children.length, 2);
+  assert.equal(element('records').children[0].children[0].textContent, '单游戏 · <img src=x>');
+  assert.equal(element('records').children[1].children[1].textContent, '随会员校验');
+  assert.equal(element('records').children[0].innerHTML, undefined);
+  rows = [];
+  await refresh();
+  assert.equal(element('records').children.length, 0);
+  assert.match(element('records').textContent, /暂无权益记录/);
+  assert.match(element('record-count').textContent, /^0 份权益/);
 });

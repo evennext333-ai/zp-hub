@@ -29,7 +29,28 @@
   const base = () => admin ? '/api/admin/hub' : '/api/web/hub';
   async function refresh() {
     const records = await api(`${base()}/keys`);
-    el('records').textContent = JSON.stringify(records, null, 2);
+    const container = el('records');
+    container.replaceChildren();
+    if (!records.length) container.textContent = '暂无权益记录，领取或发放后将显示在这里。';
+    for (const record of records) {
+      const card = document.createElement('article');
+      card.className = 'record';
+      const add = (tag, value, className = '') => {
+        const node = document.createElement(tag);
+        node.textContent = value;
+        node.className = className;
+        card.append(node);
+      };
+      const expired = record.expiresAt && new Date(record.expiresAt).getTime() <= Date.now();
+      const state = record.revokedAt ? '已吊销' : record.kind === 'MEMBER' ? '随会员校验' : expired ? '已到期' : record.activatedAt ? '有效' : '待激活';
+      add('h3', record.kind === 'MEMBER' ? '全游戏会员授权' : `单游戏 · ${record.gameId}`);
+      add('span', state, 'pill');
+      add('p', record.kind === 'MEMBER' ? '有效期跟随会员状态' : record.expiresAt ? `到期 ${new Date(record.expiresAt).toLocaleString('zh-CN')}` : '首次激活后有效 30 天');
+      add('p', `权益 ID  ${record.id}`, 'record-id');
+      container.append(card);
+    }
+    const count = el('record-count');
+    if (count) count.textContent = `${records.length} 份权益 · 最近记录`;
   }
   function issued(data) {
     el('key').value = data.key;
@@ -97,6 +118,10 @@
   el('logout').addEventListener('click', () => {
     token = ''; clearKey();
     el('controls').hidden = true; el('login').hidden = false;
-    el('records').textContent = '请先登录'; status('已退出本页');
+    el('records').replaceChildren();
+    el('records').textContent = '登录后，你的权益记录会显示在这里。';
+    const count = el('record-count');
+    if (count) count.textContent = '尚未登录';
+    status('已退出本页');
   });
 })();
