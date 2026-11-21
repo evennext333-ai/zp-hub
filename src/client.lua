@@ -121,7 +121,8 @@ local function api(method, path, body, bearer, allowClosed)
     local finished, response = false, nil
     local started = os.clock()
     local thread = task.spawn(function()
-        local headers = { ["Content-Type"] = "application/json" }
+        local headers = {}
+        if body then headers["Content-Type"] = "application/json" end
         if bearer then headers.Authorization = "Bearer " .. bearer end
         local args = { Url = API .. path, Method = method, Headers = headers }
         if body then args.Body = Http:JSONEncode(body) end

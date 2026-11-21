@@ -86,6 +86,7 @@ local environment = {
     counters = counter,
 }
 environment.request = function(args)
+    if not args.Body then assert(args.Headers["Content-Type"] == nil, "空请求不声明 JSON 正文，保留真实退出请求兼容性") end
     local data
     if args.Url:find("/catalog", 1, true) then
         data = { version = "hall-fixture", scripts = { entry } }
