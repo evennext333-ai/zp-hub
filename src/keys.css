@@ -1,0 +1,11 @@
+:root { color-scheme: dark; font: 16px/1.6 system-ui, sans-serif; background: #141924; color: #e6ebf5; }
+body { margin: 0; }
+main { max-width: 760px; margin: 32px auto; padding: 0 20px 40px; }
+label { display: block; margin: 12px 0; }
+input:not([type=checkbox]), select, textarea { display: block; box-sizing: border-box; width: 100%; padding: 12px; margin-top: 6px; border: 1px solid #657590; border-radius: 6px; background: #222a3a; color: inherit; font: inherit; }
+button { min-height: 44px; padding: 8px 16px; margin: 6px 6px 6px 0; background: #2f528c; color: #fff; border: 1px solid #7189af; border-radius: 6px; font: inherit; cursor: pointer; }
+button:disabled { opacity: .55; cursor: wait; }
+:focus-visible { outline: 3px solid #a7d0ff; outline-offset: 3px; }
+pre { white-space: pre-wrap; overflow-wrap: anywhere; background: #222a3a; padding: 16px; border-radius: 6px; }
+a { color: #a7d0ff; }
+[hidden] { display: none !important; }

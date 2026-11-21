@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Hub Key 管理</title>
+  <link rel="stylesheet" href="keys.css">
+  <script src="keys.js" defer></script>
+</head>
+<body>
+<main>
+  <h1>Hub Key 管理</h1>
+  <p>使用现有 zp-b 账号。登录凭证只保留在本页内存，Key 仅在创建时展示，请自行妥善保存。</p>
+  <form id="login">
+    <label>账号<input name="account" autocomplete="username" required minlength="3" maxlength="100"></label>
+    <label>密码<input name="password" type="password" autocomplete="current-password" required minlength="6" maxlength="100"></label>
+    <label class="inline"><input name="admin" type="checkbox">后台管理员</label>
+    <button>登录</button>
+  </form>
+  <section id="controls" hidden>
+    <button id="refresh">刷新权益</button>
+    <button id="logout">退出本页</button>
+    <div id="member" hidden>
+      <button id="claim">领取会员 Key</button>
+      <button id="reset">重置会员 Key</button>
+      <p>重置会立即使旧 Key 和旧会话失效。原明文 Key 遗失后，请使用重置。</p>
+    </div>
+    <form id="issue" hidden>
+      <label>游戏<select name="gameId" required></select></label>
+      <button>发放单游戏 30 天 Key</button>
+    </form>
+    <form id="revoke" hidden>
+      <label>权益 ID<input name="id" required maxlength="36"></label>
+      <button>吊销权益及其会话</button>
+    </form>
+  </section>
+  <p id="status" role="status" aria-live="polite"></p>
+  <section id="issued" hidden>
+    <label>新 Key<textarea id="key" readonly rows="3" spellcheck="false"></textarea></label>
+    <button id="copy">复制 Key</button>
+    <button id="clear">清除展示</button>
+  </section>
+  <h2>权益记录</h2>
+  <pre id="records">请先登录</pre>
+  <p>统一加载入口：<a href="https://github.com/evennext333-ai/zp-hub/releases/latest/download/loader.lua">GitHub loader.lua</a> · <a href="loader.lua">国内备用入口</a></p>
+  <p>构建工具：Based on Prometheus by Elias Oelschner, <a href="https://github.com/prometheus-lua/Prometheus">https://github.com/prometheus-lua/Prometheus</a></p>
+</main>
+</body>
+</html>

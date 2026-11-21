@@ -1,0 +1,134 @@
+name: Build and publish public Hub
+
+on:
+  push:
+    tags:
+      - 'hub-v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag matching Hub VERSION, e.g. hub-v1.0.0'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hub-release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+      source_sha: ${{ steps.version.outputs.source_sha }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: refs/tags/${{ inputs.tag || github.ref_name }}
+          persist-credentials: false
+      - name: Validate release tag
+        id: version
+        env:
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          python3 - <<'PY'
+          import os, subprocess
+          version = open('VERSION').read().strip()
+          tag = os.environ['RELEASE_TAG']
+          if tag != 'hub-v' + version:
+              raise SystemExit('Tag must match VERSION')
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+              f.write('tag=' + tag + '\n')
+              f.write('source_sha=' + subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip() + '\n')
+          PY
+      - name: Install pinned build tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y lua5.1
+          git init -q "$RUNNER_TEMP/prometheus"
+          git -C "$RUNNER_TEMP/prometheus" remote add origin https://github.com/prometheus-lua/Prometheus.git
+          git -C "$RUNNER_TEMP/prometheus" fetch --depth=1 origin a98c50165f2a53f6d765a82eee60dfea53803445
+          git -C "$RUNNER_TEMP/prometheus" checkout -q --detach FETCH_HEAD
+          curl -fL --retry 3 https://github.com/lune-org/lune/releases/download/v0.10.5/lune-0.10.5-linux-x86_64.zip -o "$RUNNER_TEMP/lune.zip"
+          echo "1fb5dee6a1afa1d300092805c6e660fe06144d29dd68c45cf6956f040667f791  $RUNNER_TEMP/lune.zip" | sha256sum -c -
+          mkdir "$RUNNER_TEMP/lune"
+          unzip -q "$RUNNER_TEMP/lune.zip" -d "$RUNNER_TEMP/lune"
+          chmod +x "$RUNNER_TEMP/lune/lune"
+          echo "$RUNNER_TEMP/lune" >> "$GITHUB_PATH"
+      - name: Test source and publish boundary
+        env:
+          HUB_PROMETHEUS_DIR: ${{ runner.temp }}/prometheus
+        run: |
+          python3 -m unittest discover -s tests -p 'test_*.py'
+          lune run tests/test_runtime.luau
+          lune run tests/test_client.luau
+          node --check src/keys.js
+          node --test tests/test_keys.mjs
+      - name: Obfuscate public Hub
+        env:
+          HUB_SOURCE_REPOSITORY: ${{ github.repository }}
+          HUB_SOURCE_COMMIT: ${{ steps.version.outputs.source_sha }}
+        run: |
+          python3 build.py --prometheus-dir "$RUNNER_TEMP/prometheus" --output "$RUNNER_TEMP/hub-package"
+          python3 publish.py --prometheus-dir "$RUNNER_TEMP/prometheus" --output "$RUNNER_TEMP/hub-public"
+          cmp "$RUNNER_TEMP/hub-package/loader.lua" "$RUNNER_TEMP/hub-public/loader.lua"
+          cd "$RUNNER_TEMP/hub-public"
+          sha256sum -c SHA256SUMS
+      - name: Test generated loader
+        env:
+          HUB_TEST_LOADER: ${{ runner.temp }}/hub-public/loader.lua
+        run: |
+          lune run tests/test_client.luau
+          HUB_TEST_STARVE_WATCHDOG=1 lune run tests/test_client.luau
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: hub-server-assets
+          if-no-files-found: error
+          retention-days: 7
+          path: |
+            ${{ runner.temp }}/hub-package/loader.lua
+            ${{ runner.temp }}/hub-package/keys.html
+            ${{ runner.temp }}/hub-package/keys.js
+            ${{ runner.temp }}/hub-package/keys.css
+            ${{ runner.temp }}/hub-package/hub.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: hub-public
+          if-no-files-found: error
+          retention-days: 7
+          path: |
+            ${{ runner.temp }}/hub-public/loader.lua
+            ${{ runner.temp }}/hub-public/NOTICE.txt
+            ${{ runner.temp }}/hub-public/SHA256SUMS
+
+  publish:
+    needs: build
+    if: github.repository == 'evennext333-ai/zp-hub'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: hub-public
+          path: public
+      - name: Publish versioned release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: evennext333-ai/zp-hub
+          RELEASE_TAG: ${{ needs.build.outputs.tag }}
+          SOURCE_REPOSITORY: ${{ github.repository }}
+          SOURCE_SHA: ${{ needs.build.outputs.source_sha }}
+        run: |
+          cd public
+          test "$(find . -maxdepth 1 -type f | wc -l)" -eq 3
+          sha256sum -c SHA256SUMS
+          gh release create "$RELEASE_TAG" loader.lua NOTICE.txt SHA256SUMS \
+            --verify-tag --target "$SOURCE_SHA" --title "$RELEASE_TAG" --draft \
+            --notes "Public obfuscated Hub only. Source: https://github.com/$SOURCE_REPOSITORY/tree/$SOURCE_SHA . Loader: https://github.com/evennext333-ai/zp-hub/releases/latest/download/loader.lua . Game scripts are served by the existing script hall API after authorization. API: https://www.zldelf.cloud/api. See NOTICE.txt for attribution."
+          gh release edit "$RELEASE_TAG" --draft=false --latest
