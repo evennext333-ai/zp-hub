@@ -1,5 +1,6 @@
 local Runtime = {}
 
+-- 仅管理 Hub 自己的 UI 资源；游戏脚本原样执行，由断开本局处理授权失效。
 function Runtime.lifecycle()
     local cleanups = {}
     local context = { alive = true }

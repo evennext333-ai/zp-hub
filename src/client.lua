@@ -1,23 +1,27 @@
 -- API 与 Runtime 由离线构建注入；首版只有一个国内 API。
 local env = (type(getgenv) == "function" and getgenv()) or _G
+local pendingKey = type(env.HUB_KEY) == "string" and env.HUB_KEY or ""
+env.HUB_KEY = nil
 local existing = env.__RSZH_HUB
 if type(existing) == "table" and existing.alive then
+    assert(existing.policy == "background-v1", "Hub 会话策略已更新，请先重新进入游戏再加载")
     existing.focus()
     return
 end
 local Http = game:GetService("HttpService")
 local Players = game:GetService("Players")
-local guiParent = Players.LocalPlayer:WaitForChild("PlayerGui", 10)
-assert(guiParent, "玩家界面尚未就绪，请稍后重试")
+local player = Players.LocalPlayer
+local kickPlayer = player.Kick
+assert(type(kickPlayer) == "function", "运行环境需要支持结束当前游戏会话")
 local requestFn = request or http_request or (syn and syn.request) or (http and http.request)
 assert(type(requestFn) == "function", "运行环境需要支持 HTTPS POST 和请求头")
 assert(type(loadstring) == "function", "运行环境需要支持 loadstring")
-local uiContext = Runtime.lifecycle()
-local owner = { alive = true }
-local pendingKey = type(env.HUB_KEY) == "string" and env.HUB_KEY or ""
-env.HUB_KEY = nil
+local owner = { alive = true, policy = "background-v1" }
 local token, leaseUntil, sessionId = nil, 0, nil
-local current, loading, loginBusy, requestSequence = nil, false, false, 0
+local scriptStarted, loading, loginBusy, requestSequence = false, false, false, 0
+local endSession, login, run, mountUI
+local view, mountingUI = nil, false
+local statusMessage = "正在获取正式目录…"
 local catalog = {}
 local errors = {
     HUB_KEY_INVALID = "Key 无效或已重置", HUB_LICENSE_REVOKED = "权益已吊销",
@@ -28,132 +32,19 @@ local errors = {
     NETWORK_ERROR = "网络暂时异常", INVALID_RESPONSE = "服务响应异常",
 }
 local function errorText(code) return errors[code] or tostring(code or "未知错误") end
-
-local function object(className, properties, parent)
-    local item = Instance.new(className)
-    for key, value in pairs(properties) do item[key] = value end
-    item.Parent = parent
-    return item
-end
-local colors = {
-    canvas = Color3.fromRGB(16, 23, 31), surface = Color3.fromRGB(24, 33, 43),
-    border = Color3.fromRGB(47, 61, 74), text = Color3.fromRGB(238, 244, 247),
-    muted = Color3.fromRGB(154, 174, 188), accent = Color3.fromRGB(99, 225, 196),
-    ink = Color3.fromRGB(14, 42, 37),
+local authorizationErrors = {
+    HUB_KEY_INVALID = true, HUB_LICENSE_REVOKED = true, HUB_LICENSE_INVALID = true,
+    HUB_LICENSE_EXPIRED = true, HUB_VIP_REQUIRED = true, HUB_SESSION_REPLACED = true,
+    HUB_SESSION_EXPIRED = true, HUB_SESSION_INVALID = true,
 }
-local function rounded(item, radius)
-    object("UICorner", { CornerRadius = UDim.new(0, radius or 10) }, item)
-    return item
-end
-local function outline(item, color)
-    object("UIStroke", { Color = color or colors.border, Thickness = 1, ApplyStrokeMode = Enum.ApplyStrokeMode.Border }, item)
-end
-local function text(parent, value, x, y, width, height, size, color)
-    return object("TextLabel", {
-        Position = UDim2.fromOffset(x, y), Size = UDim2.new(1, width, 0, height),
-        BackgroundTransparency = 1, Text = value, TextColor3 = color or colors.text,
-        Font = Enum.Font.Gotham, TextSize = size or 14, TextWrapped = true,
-        TextXAlignment = Enum.TextXAlignment.Left,
-    }, parent)
-end
-local gui = object("ScreenGui", { Name = "RSZH_Hub", ResetOnSpawn = false, ZIndexBehavior = Enum.ZIndexBehavior.Sibling }, guiParent)
-uiContext.onCleanup(function() gui:Destroy() end)
-local panel = rounded(object("ScrollingFrame", {
-    AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
-    Size = UDim2.new(0.92, 0, 0.88, 0), BackgroundColor3 = colors.canvas,
-    CanvasSize = UDim2.fromOffset(0, 600), AutomaticCanvasSize = Enum.AutomaticSize.Y, Visible = true,
-    ScrollBarThickness = 3, ScrollBarImageColor3 = colors.border, BorderSizePixel = 0,
-}, gui), 16)
-outline(panel)
-object("UISizeConstraint", { MaxSize = Vector2.new(720, 640) }, panel)
-rounded(object("TextLabel", {
-    Position = UDim2.fromOffset(22, 22), Size = UDim2.fromOffset(42, 42),
-    BackgroundColor3 = colors.accent, Text = "ZP", Font = Enum.Font.GothamBold,
-    TextColor3 = colors.ink, TextSize = 18,
-}, panel))
-text(panel, "ZP HUB", 78, 18, -100, 28, 22)
-text(panel, "你的游戏脚本库 · 国内节点", 78, 47, -100, 20, 12, colors.muted)
-text(panel, "自动识别游戏  /  " .. tostring(game.GameId) .. "  ·  地图 " .. tostring(game.PlaceId), 22, 82, -44, 24, 12, colors.muted)
-local authorization = rounded(object("Frame", {
-    Position = UDim2.fromOffset(20, 120), Size = UDim2.new(1, -40, 0, 152),
-    BackgroundColor3 = colors.surface, BorderSizePixel = 0,
-}, panel), 12)
-outline(authorization)
-text(authorization, "访问授权", 16, 10, -32, 24, 14)
-local status = text(authorization, "正在获取正式目录…", 16, 38, -32, 50, 13, colors.muted)
-local function input(parent, placeholder, position, size)
-    local field = rounded(object("TextBox", {
-        Position = position, Size = size, BackgroundColor3 = colors.canvas,
-        TextColor3 = colors.text, PlaceholderColor3 = colors.muted,
-        Font = Enum.Font.Gotham, TextSize = 14, TextXAlignment = Enum.TextXAlignment.Left,
-        PlaceholderText = placeholder, Text = "", ClearTextOnFocus = false,
-    }, parent), 8)
-    object("UIPadding", { PaddingLeft = UDim.new(0, 12), PaddingRight = UDim.new(0, 12) }, field)
-    outline(field, Color3.fromRGB(82, 103, 121))
-    return field
-end
-local function button(parent, value, position, size, primary)
-    local item = rounded(object("TextButton", {
-        Position = position, Size = size, BackgroundColor3 = primary and colors.accent or colors.surface,
-        TextColor3 = primary and colors.ink or colors.text, Font = Enum.Font.GothamMedium,
-        TextSize = 13, Text = value, Selectable = true, AutoButtonColor = true, BorderSizePixel = 0,
-    }, parent), 8)
-    if not primary then outline(item) end
-    return item
-end
-local keyBox = input(authorization, pendingKey ~= "" and "已读取外部 Key" or "输入 Key 或设置 HUB_KEY", UDim2.fromOffset(16, 100), UDim2.new(1, -148, 0, 44))
-local loginButton = button(authorization, "校验 Key", UDim2.new(1, -116, 0, 100), UDim2.fromOffset(100, 44), true)
-local searchBox = input(panel, "搜索脚本名称、别名或标签…", UDim2.fromOffset(20, 292), UDim2.new(1, -40, 0, 44))
-text(panel, "脚本库", 22, 347, -150, 24, 15)
-local countLabel = text(panel, "正在同步", 22, 347, -44, 24, 12, colors.muted)
-countLabel.TextXAlignment = Enum.TextXAlignment.Right
-local list = object("ScrollingFrame", {
-    Position = UDim2.fromOffset(20, 382), Size = UDim2.new(1, -40, 0, 170),
-    BackgroundTransparency = 1, BorderSizePixel = 0, ScrollBarThickness = 3,
-    ScrollBarImageColor3 = colors.border, AutomaticCanvasSize = Enum.AutomaticSize.Y, CanvasSize = UDim2.new(),
-}, panel)
-object("UIListLayout", { Padding = UDim.new(0, 10), SortOrder = Enum.SortOrder.LayoutOrder }, list)
-local emptyLabel = text(list, "没有匹配的脚本\n试试其他名称或标签", 0, 0, -8, 96, 14, colors.muted)
-emptyLabel.Visible = false
-emptyLabel.TextXAlignment = Enum.TextXAlignment.Center
-local stopButton = button(panel, "停止脚本", UDim2.fromOffset(20, 576), UDim2.new(0.5, -26, 0, 44))
-local exitButton = button(panel, "退出 Hub", UDim2.new(0.5, 6, 0, 576), UDim2.new(0.5, -26, 0, 44))
-local toggle = button(gui, "收起 Hub", UDim2.new(1, -132, 0, 16), UDim2.fromOffset(116, 44))
-local cards = {}
-owner.focus = function() gui.Enabled = true panel.Visible = true toggle.Text = "收起 Hub" end
-env.__RSZH_HUB = owner
-uiContext.onCleanup(function()
-    if env.__RSZH_HUB == owner then env.__RSZH_HUB = nil end
-end)
-local function connect(signal, callback)
-    local connection = signal:Connect(callback)
-    uiContext.onCleanup(function() connection:Disconnect() end)
-end
-local function fitList()
-    local height = math.max(140, panel.AbsoluteSize.Y - 456)
-    list.Size = UDim2.new(1, -40, 0, height)
-    stopButton.Position = UDim2.fromOffset(20, 398 + height)
-    exitButton.Position = UDim2.new(0.5, 6, 0, 398 + height)
-    panel.CanvasSize = UDim2.fromOffset(0, 454 + height)
-end
-connect(panel:GetPropertyChangedSignal("AbsoluteSize"), fitList)
-fitList()
-connect(toggle.Activated, function()
-    panel.Visible = not panel.Visible
-    toggle.Text = panel.Visible and "收起 Hub" or "打开 Hub"
-end)
+
 local function setStatus(value)
-    if owner.alive then status.Text = value end
+    statusMessage = value
+    if view and view.context.alive then view.status.Text = value end
 end
-local function stopScript()
-    local running = current
-    current = nil
-    if running then running.stop() end
-end
+
 local function terminate(message)
-    token, sessionId, leaseUntil = nil, nil, 0
-    stopScript()
-    setStatus(message .. "；请重新填写 Key 后校验")
+    endSession(message)
 end
 
 local function api(method, path, body, bearer, allowClosed)
@@ -183,10 +74,22 @@ local function api(method, path, body, bearer, allowClosed)
     return nil, type(decoded.error) == "table" and decoded.error.code or "REQUEST_FAILED", started
 end
 
-local function login()
-    if token and os.clock() < leaseUntil then return true end
+local function logout(oldToken)
+    if oldToken then
+        task.spawn(function() api("DELETE", "/api/hub/sessions/current", nil, oldToken, true) end)
+    end
+end
+
+login = function(inputKey)
+    if not owner.alive then return false end
+    if token then
+        if os.clock() < leaseUntil then return true end
+        terminate("授权连接中断，租约已到期")
+        return false
+    end
     if loginBusy then return false end
-    local key = keyBox.Text ~= "" and keyBox.Text or pendingKey
+    local key = type(inputKey) == "string" and inputKey ~= "" and inputKey or pendingKey
+    inputKey = nil
     key = key:match("^%s*(.-)%s*$")
     if key == "" then setStatus("请先填写 Key") return false end
     local hwidFn = gethwid or getexecutorhwid
@@ -197,112 +100,284 @@ local function login()
         return false
     end
     loginBusy = true
-    keyBox.Text, pendingKey = "", ""
-    keyBox.PlaceholderText = "Key 已清理，请重新填写"
+    pendingKey = ""
+    if view then
+        view.keyBox.Text = ""
+        view.keyBox.PlaceholderText = "Key 已清理，请重新填写"
+    end
     setStatus("正在校验授权…")
     local body = { key = key, hwid = hwid, requestId = Http:GenerateGUID(false), universeId = game.GameId, placeId = game.PlaceId }
-    local data, err, sent = api("POST", "/api/hub/sessions", body)
+    -- 手动结束本局后仍接收已发出的登录结果，再尽力注销晚到的会话。
+    local data, err, sent = api("POST", "/api/hub/sessions", body, nil, true)
     if err == "NETWORK_ERROR" and owner.alive then
-        data, err, sent = api("POST", "/api/hub/sessions", body)
+        data, err, sent = api("POST", "/api/hub/sessions", body, nil, true)
     end
     body.key, key = nil, nil
     loginBusy = false
-    if not owner.alive then return false end
+    if not owner.alive then
+        if data and type(data.token) == "string" then logout(data.token) end
+        return false
+    end
     if not data or type(data.token) ~= "string" or type(data.sessionId) ~= "string" then
         setStatus("校验未完成：" .. errorText(err or "INVALID_RESPONSE"))
         return false
     end
     local valid, deadline = pcall(Runtime.deadline, sent, data.remainingLeaseSeconds)
-    if not valid or os.clock() >= deadline then setStatus("登录响应已过期，请重新校验") return false end
+    if not valid or os.clock() >= deadline then
+        logout(data.token)
+        setStatus("登录响应已过期，请重新校验")
+        return false
+    end
     token, sessionId, leaseUntil = data.token, data.sessionId, deadline
     requestSequence = 0
     setStatus("授权有效 · " .. (data.kind == "MEMBER" and "全游戏会员" or "单游戏 30 天") .. " · 到期 " .. tostring(data.entitlementExpiresAt or "长期"))
     return true
 end
 
-local function run(script)
-    if loading or not owner.alive then return end
-    if not script.enabled then setStatus("此脚本仍在适配或游戏内验收阶段") return end
+run = function(script, inputKey)
+    if not owner.alive then return end
+    if scriptStarted then setStatus("本局已启动脚本；切换或重载请结束本局后重新进入游戏") return end
+    if loading then return end
+    if not script.enabled then setStatus("此脚本仍待接入验收") return end
     if not script.universal and Runtime.rank(script, game.GameId, game.PlaceId) > 0 then
         setStatus("此脚本与当前游戏或地图不匹配")
         return
     end
     loading = true
-    if not login() then loading = false return end
-    stopScript()
-    local context = Runtime.lifecycle()
-    current = context
+    local authenticated = login(inputKey)
+    inputKey = nil
+    if not authenticated then loading = false return end
     local activeToken = token
     setStatus("正在下载 " .. script.nameZh .. "…")
     local data, err = api("POST", "/api/hub/scripts/" .. script.id .. "/load", {}, activeToken)
-    if not owner.alive or not context.alive or token ~= activeToken then loading = false return end
+    if not owner.alive or token ~= activeToken then loading = false return end
     if os.clock() >= leaseUntil then terminate("运行租约已到期") loading = false return end
     if not data or type(data.source) ~= "string" then
-        context.stop()
-        setStatus("加载失败：" .. errorText(err or "INVALID_RESPONSE"))
+        if authorizationErrors[err] then terminate("授权已失效：" .. errorText(err))
+        else setStatus("加载失败：" .. errorText(err or "INVALID_RESPONSE")) end
         loading = false
         return
     end
-    local fn = loadstring(data.source, "=Hub/" .. script.id)
-    if not fn then context.stop() setStatus("脚本编译失败") loading = false return end
-    local ok, cleanup = pcall(fn, context)
-    if ok and type(cleanup) == "function" then context.onCleanup(cleanup) end
+    local compiled, fn = pcall(loadstring, data.source, "=Hub/" .. script.id)
+    if not owner.alive then loading = false return end
+    if os.clock() >= leaseUntil then terminate("运行租约已到期") loading = false return end
+    if not compiled or type(fn) ~= "function" then setStatus("脚本编译失败") loading = false return end
+    -- 原文、运行环境、参数与返回值均保持原语义；启动后通过结束本局终止使用。
+    scriptStarted = true
+    setStatus("正在启动 " .. script.nameZh .. "；关闭界面仍继续后台校验")
+    if not owner.alive then loading = false return end
+    local ok = pcall(fn)
     if not ok then
-        context.stop()
-        setStatus("脚本启动失败，已执行清理")
-    elseif context.alive then
-        setStatus("运行中：" .. script.nameZh)
+        if owner.alive then setStatus("脚本启动异常，授权监控继续；请手动结束本局后重试") end
+    elseif owner.alive then
+        setStatus("运行中：" .. script.nameZh .. "；关闭界面仍继续后台校验")
     end
     loading = false
 end
 
-local function render()
-    for _, card in ipairs(cards) do card:Destroy() end
-    table.clear(cards)
-    local filtered = Runtime.search(catalog, searchBox.Text, game.GameId, game.PlaceId)
-    for index, script in ipairs(filtered) do
-        local rank = Runtime.rank(script, game.GameId, game.PlaceId)
-        local category = rank == 0 and "当前游戏" or (script.universal and "通用脚本" or "其他游戏")
-        local card = rounded(object("TextButton", {
-            Size = UDim2.new(1, -8, 0, 76), LayoutOrder = index,
-            Text = script.nameZh, TextTransparency = 1, Selectable = true, AutoButtonColor = true,
-            BackgroundColor3 = colors.surface, BorderSizePixel = 0,
-        }, list), 10)
-        outline(card, rank == 0 and colors.accent or colors.border)
-        local title = text(card, script.nameZh, 16, 10, -132, 26, 15, script.enabled and colors.text or colors.muted)
-        title.TextWrapped = false
-        title.TextTruncate = Enum.TextTruncate.AtEnd
-        local details = category .. (#(script.tags or {}) > 0 and "  ·  " .. table.concat(script.tags, " / ") or "")
-        local caption = text(card, details, 16, 40, -132, 20, 12, colors.muted)
-        caption.TextWrapped = false
-        caption.TextTruncate = Enum.TextTruncate.AtEnd
-        local action = text(card, script.enabled and "加载  →" or "待适配", 0, 0, -16, 76, 13, script.enabled and colors.accent or colors.muted)
-        action.TextXAlignment = Enum.TextXAlignment.Right
-        card.Activated:Connect(function() task.spawn(run, script) end)
-        table.insert(cards, card)
+-- UI 的资源作用域仅属于这一轮视图；销毁它不会改变授权控制器。
+local function buildView(uiContext)
+    local guiParent = player:WaitForChild("PlayerGui", 10)
+    assert(guiParent, "玩家界面尚未就绪，请重新加载入口恢复界面")
+    local function object(className, properties, parent)
+        local item = Instance.new(className)
+        for key, value in pairs(properties) do item[key] = value end
+        item.Parent = parent
+        return item
     end
-    countLabel.Text = tostring(#filtered) .. " 个脚本 · 当前游戏优先"
-    emptyLabel.Visible = #filtered == 0
-    if #filtered == 0 then setStatus("没有匹配的脚本") end
+    local colors = {
+        canvas = Color3.fromRGB(16, 23, 31), surface = Color3.fromRGB(24, 33, 43),
+        border = Color3.fromRGB(47, 61, 74), text = Color3.fromRGB(238, 244, 247),
+        muted = Color3.fromRGB(154, 174, 188), accent = Color3.fromRGB(99, 225, 196),
+        ink = Color3.fromRGB(14, 42, 37),
+    }
+    local function rounded(item, radius)
+        object("UICorner", { CornerRadius = UDim.new(0, radius or 10) }, item)
+        return item
+    end
+    local function outline(item, color)
+        object("UIStroke", { Color = color or colors.border, Thickness = 1, ApplyStrokeMode = Enum.ApplyStrokeMode.Border }, item)
+    end
+    local function text(parent, value, x, y, width, height, size, color)
+        return object("TextLabel", {
+            Position = UDim2.fromOffset(x, y), Size = UDim2.new(1, width, 0, height),
+            BackgroundTransparency = 1, Text = value, TextColor3 = color or colors.text,
+            Font = Enum.Font.Gotham, TextSize = size or 14, TextWrapped = true,
+            TextXAlignment = Enum.TextXAlignment.Left,
+        }, parent)
+    end
+    local gui = object("ScreenGui", { Name = "RSZH_Hub", ResetOnSpawn = false, ZIndexBehavior = Enum.ZIndexBehavior.Sibling }, guiParent)
+    uiContext.onCleanup(function() gui:Destroy() end)
+    local panel = rounded(object("ScrollingFrame", {
+        AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
+        Size = UDim2.new(0.92, 0, 0.88, 0), BackgroundColor3 = colors.canvas,
+        CanvasSize = UDim2.fromOffset(0, 600), AutomaticCanvasSize = Enum.AutomaticSize.Y, Visible = true,
+        ScrollBarThickness = 3, ScrollBarImageColor3 = colors.border, BorderSizePixel = 0,
+    }, gui), 16)
+    outline(panel)
+    object("UISizeConstraint", { MaxSize = Vector2.new(720, 640) }, panel)
+    rounded(object("TextLabel", {
+        Position = UDim2.fromOffset(22, 22), Size = UDim2.fromOffset(42, 42),
+        BackgroundColor3 = colors.accent, Text = "ZP", Font = Enum.Font.GothamBold,
+        TextColor3 = colors.ink, TextSize = 18,
+    }, panel))
+    text(panel, "ZP HUB", 78, 18, -100, 28, 22)
+    text(panel, "国内节点 · 关闭界面后仍后台校验", 78, 47, -100, 20, 12, colors.muted)
+    text(panel, "自动识别游戏  /  " .. tostring(game.GameId) .. "  ·  地图 " .. tostring(game.PlaceId), 22, 82, -44, 24, 12, colors.muted)
+    local authorization = rounded(object("Frame", {
+        Position = UDim2.fromOffset(20, 120), Size = UDim2.new(1, -40, 0, 152),
+        BackgroundColor3 = colors.surface, BorderSizePixel = 0,
+    }, panel), 12)
+    outline(authorization)
+    text(authorization, "访问授权", 16, 10, -32, 24, 14)
+    local status = text(authorization, statusMessage, 16, 38, -32, 50, 13, colors.muted)
+    local function input(parent, placeholder, position, size)
+        local field = rounded(object("TextBox", {
+            Position = position, Size = size, BackgroundColor3 = colors.canvas,
+            TextColor3 = colors.text, PlaceholderColor3 = colors.muted,
+            Font = Enum.Font.Gotham, TextSize = 14, TextXAlignment = Enum.TextXAlignment.Left,
+            PlaceholderText = placeholder, Text = "", ClearTextOnFocus = false,
+        }, parent), 8)
+        object("UIPadding", { PaddingLeft = UDim.new(0, 12), PaddingRight = UDim.new(0, 12) }, field)
+        outline(field, Color3.fromRGB(82, 103, 121))
+        return field
+    end
+    local function button(parent, value, position, size, primary)
+        local item = rounded(object("TextButton", {
+            Position = position, Size = size, BackgroundColor3 = primary and colors.accent or colors.surface,
+            TextColor3 = primary and colors.ink or colors.text, Font = Enum.Font.GothamMedium,
+            TextSize = 13, Text = value, Selectable = true, AutoButtonColor = true, BorderSizePixel = 0,
+        }, parent), 8)
+        if not primary then outline(item) end
+        return item
+    end
+    local keyBox = input(authorization, token and "已登录；Key 不保存在界面" or (pendingKey ~= "" and "已读取外部 Key" or "输入 Key 或设置 HUB_KEY"), UDim2.fromOffset(16, 100), UDim2.new(1, -148, 0, 44))
+    local loginButton = button(authorization, "校验 Key", UDim2.new(1, -116, 0, 100), UDim2.fromOffset(100, 44), true)
+    local searchBox = input(panel, "搜索脚本名称、别名或标签…", UDim2.fromOffset(20, 292), UDim2.new(1, -40, 0, 44))
+    text(panel, "脚本库", 22, 347, -150, 24, 15)
+    local countLabel = text(panel, "正在同步", 22, 347, -44, 24, 12, colors.muted)
+    countLabel.TextXAlignment = Enum.TextXAlignment.Right
+    local list = object("ScrollingFrame", {
+        Position = UDim2.fromOffset(20, 382), Size = UDim2.new(1, -40, 0, 170),
+        BackgroundTransparency = 1, BorderSizePixel = 0, ScrollBarThickness = 3,
+        ScrollBarImageColor3 = colors.border, AutomaticCanvasSize = Enum.AutomaticSize.Y, CanvasSize = UDim2.new(),
+    }, panel)
+    object("UIListLayout", { Padding = UDim.new(0, 10), SortOrder = Enum.SortOrder.LayoutOrder }, list)
+    local emptyLabel = text(list, "没有匹配的脚本\n试试其他名称或标签", 0, 0, -8, 96, 14, colors.muted)
+    emptyLabel.Visible = false
+    emptyLabel.TextXAlignment = Enum.TextXAlignment.Center
+    local stopButton = button(panel, "结束本局", UDim2.fromOffset(20, 576), UDim2.new(0.5, -26, 0, 44))
+    local closeButton = button(panel, "关闭界面", UDim2.new(0.5, 6, 0, 576), UDim2.new(0.5, -26, 0, 44))
+    local toggle = button(gui, "收起 Hub", UDim2.new(1, -132, 0, 16), UDim2.fromOffset(116, 44))
+    local cards = {}
+    local currentView = { context = uiContext, status = status, keyBox = keyBox }
+    local function closeUI()
+        if view == currentView then view = nil end
+        uiContext.stop()
+    end
+    currentView.destroy = closeUI
+    currentView.focus = function() gui.Enabled = true panel.Visible = true toggle.Text = "收起 Hub" end
+    local function connect(signal, callback)
+        local connection = signal:Connect(function(...)
+            if uiContext.alive then callback(...) end
+        end)
+        uiContext.onCleanup(function() connection:Disconnect() end)
+    end
+    local function fitList()
+        local height = math.max(140, panel.AbsoluteSize.Y - 456)
+        list.Size = UDim2.new(1, -40, 0, height)
+        stopButton.Position = UDim2.fromOffset(20, 398 + height)
+        closeButton.Position = UDim2.new(0.5, 6, 0, 398 + height)
+        panel.CanvasSize = UDim2.fromOffset(0, 454 + height)
+    end
+    connect(panel:GetPropertyChangedSignal("AbsoluteSize"), fitList)
+    fitList()
+    connect(toggle.Activated, function()
+        panel.Visible = not panel.Visible
+        toggle.Text = panel.Visible and "收起 Hub" or "打开 Hub"
+    end)
+    local function render()
+        for _, card in ipairs(cards) do card:Destroy() end
+        table.clear(cards)
+        local filtered = Runtime.search(catalog, searchBox.Text, game.GameId, game.PlaceId)
+        for index, script in ipairs(filtered) do
+            local rank = Runtime.rank(script, game.GameId, game.PlaceId)
+            local category = rank == 0 and "当前游戏" or (script.universal and "通用脚本" or "其他游戏")
+            local card = rounded(object("TextButton", {
+                Size = UDim2.new(1, -8, 0, 76), LayoutOrder = index,
+                Text = script.nameZh, TextTransparency = 1, Selectable = true, AutoButtonColor = true,
+                BackgroundColor3 = colors.surface, BorderSizePixel = 0,
+            }, list), 10)
+            outline(card, rank == 0 and colors.accent or colors.border)
+            local title = text(card, script.nameZh, 16, 10, -132, 26, 15, script.enabled and colors.text or colors.muted)
+            title.TextWrapped = false
+            title.TextTruncate = Enum.TextTruncate.AtEnd
+            local details = category .. (#(script.tags or {}) > 0 and "  ·  " .. table.concat(script.tags, " / ") or "")
+            local caption = text(card, details, 16, 40, -132, 20, 12, colors.muted)
+            caption.TextWrapped = false
+            caption.TextTruncate = Enum.TextTruncate.AtEnd
+            local action = text(card, script.enabled and "加载  →" or "待验收", 0, 0, -16, 76, 13, script.enabled and colors.accent or colors.muted)
+            action.TextXAlignment = Enum.TextXAlignment.Right
+            card.Activated:Connect(function()
+                if uiContext.alive then task.spawn(run, script, keyBox.Text) end
+            end)
+            table.insert(cards, card)
+        end
+        countLabel.Text = tostring(#filtered) .. " 个脚本 · 当前游戏优先"
+        emptyLabel.Visible = #filtered == 0
+    end
+
+    connect(loginButton.Activated, function() task.spawn(login, keyBox.Text) end)
+    connect(stopButton.Activated, function() endSession("你已结束本局，请重新进入游戏后使用 Hub") end)
+    connect(searchBox:GetPropertyChangedSignal("Text"), render)
+    connect(closeButton.Activated, closeUI)
+    connect(gui.Destroying, closeUI)
+    currentView.render = render
+    render()
+    assert(gui.Parent == guiParent, "界面创建期间已被清理")
+    return currentView
 end
 
-connect(loginButton.Activated, function() task.spawn(login) end)
-connect(stopButton.Activated, function() stopScript() setStatus("脚本已停止，授权会话保持在线") end)
-connect(searchBox:GetPropertyChangedSignal("Text"), render)
-local function closeHub()
+mountUI = function()
+    if not owner.alive or mountingUI then return end
+    if view then view.focus() return end
+    mountingUI = true
+    local context = Runtime.lifecycle()
+    local ok, currentView = pcall(buildView, context)
+    mountingUI = false
+    if not ok then
+        context.stop()
+        if owner.alive then
+            warn("[ZP Hub] 界面创建失败，请重新加载入口；后台授权监控继续")
+        end
+    elseif owner.alive and context.alive then
+        view = currentView
+        view.status.Text = statusMessage
+    else context.stop() end
+end
+
+endSession = function(message)
     if not owner.alive then return end
     local oldToken = token
-    terminate("已退出")
+    token, sessionId, leaseUntil = nil, nil, 0
+    pendingKey = ""
+    if view then view.keyBox.Text = "" end
     owner.alive = false
-    uiContext.stop()
-    task.spawn(function()
-        if oldToken then api("DELETE", "/api/hub/sessions/current", nil, oldToken, true) end
-    end)
+    local disconnected = pcall(kickPlayer, player, "ZP Hub：" .. message)
+    if not disconnected then
+        setStatus("结束游戏请求失败，请立即手动离开本局；Hub 已停止加载与续租")
+        warn("[ZP Hub] 结束游戏请求失败，请立即手动离开本局")
+    end
+    logout(oldToken)
+    if disconnected then
+        if view then view.destroy() end
+        if env.__RSZH_HUB == owner then env.__RSZH_HUB = nil end
+    end
 end
-connect(exitButton.Activated, closeHub)
-connect(gui.Destroying, closeHub)
+owner.focus = mountUI
+env.__RSZH_HUB = owner
 
--- 看门狗独立于 HTTP 心跳；请求挂起时也按本地截止时间停止。
+-- 看门狗独立于 HTTP 心跳；请求挂起时也按原租约截止时间结束本局。
 task.spawn(function()
     while owner.alive do
         if token and os.clock() >= leaseUntil then terminate("授权连接中断，租约已到期") end
@@ -317,26 +392,33 @@ task.spawn(function()
             requestSequence += 1
             local sequence = requestSequence
             local data, err, sent = api("POST", "/api/hub/sessions/heartbeat", { sequence = sequence }, activeToken)
+            local renewed = false
             if owner.alive and token == activeToken and sessionId == activeId then
                 if os.clock() >= leaseUntil then
                     terminate("运行租约已到期")
                 elseif data and data.sessionId == activeId and data.sequence == sequence then
                     local ok, deadline = pcall(Runtime.deadline, sent, data.remainingLeaseSeconds)
-                    if ok and os.clock() < deadline then leaseUntil = deadline else terminate("租约响应已过期") end
-                elseif err ~= "NETWORK_ERROR" then
-                    terminate("授权已失效：" .. errorText(err or "INVALID_RESPONSE"))
+                    if ok and os.clock() < deadline then
+                        leaseUntil = deadline
+                        renewed = true
+                    end
+                elseif authorizationErrors[err] then
+                    terminate("授权已失效：" .. errorText(err))
                 end
             end
-            nextHeartbeat = os.clock() + (err == "NETWORK_ERROR" and 3 or 28 + math.random() * 4)
+            -- 网络及异常响应不续租，沿原截止时间短间隔重试。
+            nextHeartbeat = os.clock() + (renewed and 28 + math.random() * 4 or 3)
         end
         task.wait(0.2)
     end
 end)
+mountUI()
 local data, err = api("GET", "/api/hub/catalog")
+if not owner.alive then return end
 if data and type(data.scripts) == "table" then
     catalog = data.scripts
-    render()
-    setStatus("目录已就绪，请校验 Key；灰色脚本仍待适配")
+    if view then view.render() end
+    if not token then setStatus("目录已就绪；关闭界面仍后台校验，授权失效将结束本局") end
 else
     setStatus("目录下载失败：" .. errorText(err))
 end

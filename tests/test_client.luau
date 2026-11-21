@@ -5,163 +5,390 @@ local serde = require("@lune/serde")
 local task = require("@lune/task")
 local process = require("@lune/process")
 local Runtime = luau.load(fs.readFile("src/runtime.lua"))()
-local objects = {}
-local function signal()
-    local callbacks = {}
-    return {
-        Connect = function(_, callback)
-            local connection = { Connected = true }
-            function connection:Disconnect() self.Connected = false end
-            table.insert(callbacks, {callback, connection})
-            return connection
-        end,
-        Fire = function()
-            for _, entry in ipairs(callbacks) do if entry[2].Connected then entry[1]() end end
-        end,
-    }
+local clientSource = fs.readFile(process.env.HUB_TEST_LOADER or "src/client.lua")
+local originalSource = "assert(select('#', ...) == 0, '原脚本不接收 Hub 参数'); counters.starts += 1; return function() counters.cleanups += 1 end"
+local fixtures, passed = {}, 0
+local function untilTrue(callback)
+    local deadline = os.clock() + 5
+    repeat if callback() then return end; task.wait(0.01) until os.clock() >= deadline
+    error("等待条件超时")
 end
-local function create(class)
-    local item = { ClassName = class, AbsoluteSize = rb.Vector2.new(600, 560), Activated = signal(), Destroying = signal(), signals = {} }
-    function item:GetPropertyChangedSignal(name)
-        if not self.signals[name] then self.signals[name] = signal() end
-        return self.signals[name]
+local function fixture(options)
+    options = options or {}
+    local objects, threads = {}, {}
+    local counter = {logins=0, loads=0, heartbeats=0, deletes=0, catalogs=0, guiLookups=0, starts=0, cleanups=0, kicks={}, warnings={}, sources={}}
+    local server = {source=options.source or originalSource, lease=options.lease or 90,
+        delayLogin=options.delayLogin or 0, delayLoad=options.delayLoad or 0,
+        delayHeartbeat=options.delayHeartbeat or 0, loginError=options.loginError,
+        loadError=options.loadError, heartbeatError=options.heartbeatError,
+        networkHeartbeat=options.networkHeartbeat, invalidHeartbeat=options.invalidHeartbeat, loginNetworkOnce=options.loginNetworkOnce}
+    local hubEnv = {HUB_KEY="RSH_" .. string.rep("a",43)}
+    if options.legacyHub then hubEnv.__RSZH_HUB={alive=true,focus=function()error("旧实例不应复用")end} end
+    local function signal()
+        local listeners = {}
+        return {
+            Connect=function(_, callback)
+                local c = {Connected=true}
+                function c:Disconnect() self.Connected=false end
+                table.insert(listeners,{c,callback});return c
+            end,
+            Fire=function()
+                for _, entry in ipairs(table.clone(listeners)) do if entry[1].Connected then entry[2]() end end
+            end,
+        }
     end
-    function item:Destroy()
-        if self.destroyed then return end
-        self.destroyed = true
-        self.Destroying:Fire()
-        for _, child in ipairs(objects) do if child.Parent == self then child:Destroy() end end
+    local function create(class)
+        local item = {ClassName=class,AbsoluteSize=rb.Vector2.new(600,560),Activated=signal(),Destroying=signal(),signals={}}
+        function item:GetPropertyChangedSignal(name)
+            if not self.signals[name] then self.signals[name]=signal() end
+            return self.signals[name]
+        end
+        function item:Destroy()
+            if self.destroyed then return end
+            self.destroyed=true;self.Destroying:Fire()
+            for _, child in ipairs(objects) do if child.Parent==self then child:Destroy() end end
+            self.Parent=nil
+        end
+        table.insert(objects,item);return item
     end
-    table.insert(objects, item)
-    return item
-end
-local function find(text)
-    local fallback
-    for _, item in ipairs(objects) do
-        if not item.destroyed and item.Text and string.find(item.Text, text, 1, true) then
-            if item.ClassName == "TextButton" then return item end
-            fallback = item
+    local function find(text)
+        local fallback
+        for _, item in ipairs(objects) do
+            if not item.destroyed and item.Text and item.Text:find(text,1,true) then
+                if item.ClassName=="TextButton" then return item end
+                fallback=item
+            end
+        end
+        return assert(fallback,"控件缺失："..text)
+    end
+    local taskShim = {wait=task.wait,cancel=task.cancel}
+    local spawns = 0
+    function taskShim.spawn(callback,...)
+        spawns += 1
+        local thread
+        if options.starveWatchdog and process.env.HUB_TEST_STARVE_WATCHDOG=="1" and spawns==1 then
+            thread=task.spawn(function(...)task.wait(2);callback(...)end,...)
+        else thread=task.spawn(callback,...) end
+        table.insert(threads,thread);return thread
+    end
+    local generation=0
+    local player = {WaitForChild=function()
+        counter.guiLookups+=1
+        if server.guiUnavailable then error("fixture PlayerGui unavailable") end
+        if server.guiDelay then task.wait(server.guiDelay) end
+        return {}
+    end}
+    if not options.missingKick then
+        function player:Kick(message)
+            table.insert(counter.kicks,message)
+            if options.kickFails then error("fixture Kick failure") end
         end
     end
-    if fallback then return fallback end
-    error("控件缺失：" .. text)
-end
-local counter = { logins = 0, starts = 0, stops = 0, delete = 0 }
-local generation = 0
-local hubEnv = { HUB_KEY = "RSH_" .. string.rep("a", 43) }
-local http = {
-    JSONEncode = function(_, value) return serde.encode("json", value) end,
-    JSONDecode = function(_, value) return serde.decode("json", value) end,
-    GenerateGUID = function()
-        generation += 1
-        return string.format("00000000-0000-4000-8000-%012d", generation)
-    end,
-}
-local active = "HS1.fixture"
-local services = {
-    HttpService = http,
-    Players = { LocalPlayer = { WaitForChild = function() return {} end } },
-}
-local entry = {id="hall-7", gameId="demo", nameZh="授权检查", nameEn="Check", enabled=true, universal=true, lifecycle="managed", placeIds={}, universeIds={}, tags={}, aliases={}}
-local server = { delayLoad = 0, delayHeartbeat = 1 }
-local taskShim = { wait = task.wait, cancel = task.cancel }
-local starts = 0
-function taskShim.spawn(callback, ...)
-    starts += 1
-    if process.env.HUB_TEST_STARVE_WATCHDOG == "1" and starts == 1 then
-        return task.spawn(function(...)
-            task.wait(2)
-            callback(...)
-        end, ...)
+    local services = {
+        Players={LocalPlayer=player},
+        HttpService={JSONEncode=function(_,v)return serde.encode("json",v)end,JSONDecode=function(_,v)return serde.decode("json",v)end,
+            GenerateGUID=function()generation+=1;return string.format("00000000-0000-4000-8000-%012d",generation)end},
+    }
+    local environment = {
+        Runtime=Runtime,API="https://TARGET",task=taskShim,counters=counter,
+        game={GameId=1,PlaceId=2,GetService=function(_,name)return services[name]end},
+        getgenv=function()return hubEnv end,gethwid=function()return "fixture-device" end,
+        Instance={new=create},UDim2=rb.UDim2,UDim=rb.UDim,Vector2=rb.Vector2,Color3=rb.Color3,Enum=rb.Enum,
+        warn=function(message)table.insert(counter.warnings,message)end,
+    }
+    local entry={id="hall-7",gameId="demo",nameZh="授权检查",nameEn="Check",enabled=true,universal=true,lifecycle="managed",placeIds={},universeIds={},tags={},aliases={}}
+    environment.request=function(args)
+        if not args.Body then assert(args.Headers["Content-Type"]==nil,"空正文请求不声明 JSON") end
+        local data, err, status
+        if args.Url:find("/catalog",1,true) then
+            counter.catalogs+=1
+            if options.destroyDuringCatalog then
+                for _,o in ipairs(objects)do if o.Name=="RSZH_Hub" and not o.destroyed then o:Destroy()end end
+            end
+            data={version="hall-fixture",scripts={entry}}
+        elseif args.Url:find("/heartbeat",1,true) then
+            counter.heartbeats+=1;local networkFailure=server.networkHeartbeat;task.wait(server.delayHeartbeat)
+            if networkFailure then err="NETWORK_ERROR";status=503
+            else err=server.heartbeatError end
+            local body=serde.decode("json",args.Body)
+            data={sessionId=server.invalidHeartbeat and "another-session" or "fixture",sequence=body.sequence,remainingLeaseSeconds=90}
+        elseif args.Url:find("/load",1,true) then
+            assert(args.Url:find("/api/hub/scripts/hall-7/load",1,true))
+            counter.loads+=1;task.wait(server.delayLoad);err=server.loadError
+            data={id=entry.id,version="hall-7-r1",source=server.source}
+        elseif args.Method=="DELETE" then counter.deletes+=1;counter.logoutSawKicks=#counter.kicks;data=serde.null
+        else
+            counter.logins+=1;task.wait(server.delayLogin);err=server.loginError
+            if server.loginNetworkOnce and counter.logins==1 then err="NETWORK_ERROR";status=503 end
+            data={token="HS1.fixture",sessionId="fixture",remainingLeaseSeconds=server.lease,kind="GAME"}
+        end
+        if err then return {StatusCode=status or 401,Body=serde.encode("json",{success=false,error={code=err}})} end
+        return {StatusCode=200,Body=serde.encode("json",{success=true,data=data})}
     end
-    return task.spawn(callback, ...)
-end
-local environment = {
-    Runtime = Runtime, API = "https://TARGET", task = taskShim,
-    game = { GameId = 1, PlaceId = 2, GetService = function(_, name) return services[name] end },
-    getgenv = function() return hubEnv end,
-    gethwid = function() return "fixture-device" end,
-    Instance = { new = create }, UDim2 = rb.UDim2, UDim = rb.UDim,
-    Vector2 = rb.Vector2, Color3 = rb.Color3, Enum = rb.Enum,
-    counters = counter,
-}
-environment.request = function(args)
-    if not args.Body then assert(args.Headers["Content-Type"] == nil, "空请求不声明 JSON 正文，保留真实退出请求兼容性") end
-    local data
-    if args.Url:find("/catalog", 1, true) then
-        data = { version = "hall-fixture", scripts = { entry } }
-    elseif args.Url:find("/heartbeat", 1, true) then
-        local body = serde.decode("json", args.Body)
-        task.wait(server.delayHeartbeat)
-        data = { sessionId = "fixture", sequence = body.sequence, remainingLeaseSeconds = 90 }
-    elseif args.Url:find("/load", 1, true) then
-        assert(args.Url:find("/api/hub/scripts/hall-7/load", 1, true), "使用目录返回的大厅脚本 ID")
-        task.wait(server.delayLoad)
-        data = { id = entry.id, version = "hall-7-r1", source = "local c=...; counters.starts+=1; c.onCleanup(function() counters.stops+=1 end)" }
-    elseif args.Method == "DELETE" then
-        task.wait(0.1)
-        counter.delete += 1
-        data = serde.null
-    else
-        counter.logins += 1
-        data = {token=active, sessionId="fixture", remainingLeaseSeconds=0.5, kind="GAME"}
+    environment.loadstring=function(source)
+        table.insert(counter.sources,source)
+        local ok,fn=pcall(luau.load,source,{environment=environment})
+        if not ok then return nil,fn end
+        if options.endDuringCompile then
+            for _,o in ipairs(objects)do if o.Text=="结束本局" and not o.destroyed then o.Activated:Fire()end end
+        end
+        if options.closeDuringCompile then
+            for _,o in ipairs(objects)do if o.Name=="RSZH_Hub" and not o.destroyed then o:Destroy()end end
+        end
+        return fn
     end
-    return { StatusCode = 200, Body = serde.encode("json", {success=true, data=data}) }
+    local client=luau.load(clientSource,{environment=environment})
+    local f={counter=counter,server=server,env=hubEnv,objects=objects,find=find,client=client}
+    function f.click(text)find(text).Activated:Fire()end
+    function f.play()f.click("授权检查")end
+    function f.close()
+        local ok,button=pcall(find,"关闭界面")
+        if ok then button.Activated:Fire() end
+    end
+    function f.finish()
+        if f.owner and f.owner.alive then f.owner.focus();f.click("结束本局") end
+    end
+    function f.destroy()for _,o in ipairs(objects)do if o.Name=="RSZH_Hub" and not o.destroyed then o:Destroy()end end end
+    counter.clearUI=f.destroy
+    function f.cleanup()
+        server.guiUnavailable=false;server.guiDelay=nil
+        pcall(f.finish)
+        if f.owner then assert(not f.owner.alive, "手动结束本局应终止控制器") end
+        for _,thread in ipairs(threads)do if coroutine.status(thread)~="dead" then pcall(task.cancel,thread)end end
+    end
+    table.insert(fixtures,f)
+    if options.missingKick or options.legacyHub then
+        assert(not pcall(client),"缺少 Kick 或旧策略单例时不启动新脚本")
+        assert(hubEnv.HUB_KEY==nil,"初始化被拒绝也清理外部 Key")
+        return f
+    end
+    client();f.owner=hubEnv.__RSZH_HUB;assert(hubEnv.HUB_KEY==nil,"外部 Key 使用后清理")
+    return f
 end
-environment.loadstring = function(source)
-    return luau.load(source, { environment = environment })
+local function check(name,callback)
+    local ok,err=pcall(callback)
+    for _,f in ipairs(fixtures)do
+        local cleanOk,cleanError=pcall(f.cleanup)
+        if not cleanOk then ok=false;err=cleanError end
+    end
+    fixtures={}
+    if not ok then warn(name.."："..tostring(err));process.exit(1) end
+    passed+=1
 end
-local client = luau.load(fs.readFile(process.env.HUB_TEST_LOADER or "src/client.lua"), { environment = environment })
-client()
-assert(hubEnv.HUB_KEY == nil, "外部 Key 使用后应清理")
-local panel, search
-for _, item in ipairs(objects) do
-    if item.ClassName == "ScrollingFrame" and item.Parent and item.Parent.ClassName == "ScreenGui" then panel = item end
-    if item.PlaceholderText == "搜索脚本名称、别名或标签…" then search = item end
+
+check("原样执行、搜索布局、关闭与单实例恢复",function()
+    local f=fixture();local panel,search
+    for _,o in ipairs(f.objects)do
+        if o.ClassName=="ScrollingFrame" and o.Parent and o.Parent.ClassName=="ScreenGui" then panel=o end
+        if o.PlaceholderText=="搜索脚本名称、别名或标签…" then search=o end
+    end
+    assert(panel and search);panel.AbsoluteSize=rb.Vector2.new(340,300);panel:GetPropertyChangedSignal("AbsoluteSize"):Fire()
+    assert(panel.CanvasSize.Y.Offset>=590)
+    search.Text="没有这个脚本";search:GetPropertyChangedSignal("Text"):Fire();assert(f.find("没有匹配的脚本").Visible~=false)
+    search.Text="";search:GetPropertyChangedSignal("Text"):Fire()
+    f.play();untilTrue(function()return f.counter.starts==1 end)
+    assert(f.counter.sources[1]==originalSource,"正文逐字执行，不注入代码")
+    f.play();task.wait(0.02);assert(f.counter.starts==1)
+    f.click("收起 Hub");assert(f.find("打开 Hub"));f.env.HUB_KEY="RSH_"..string.rep("b",43)
+    f.client();assert(f.find("收起 Hub") and f.counter.logins==1 and f.env.HUB_KEY==nil)
+    f.close()
+    assert(#f.counter.kicks==0 and f.counter.deletes==0 and f.owner.alive and f.env.__RSZH_HUB==f.owner)
+    f.client();assert(f.find("本局已启动") and f.counter.guiLookups==2)
+    assert(f.counter.logins==1 and f.counter.loads==1 and f.counter.starts==1 and f.counter.catalogs==1)
+    f.finish();untilTrue(function()return f.counter.deletes==1 end)
+    assert(#f.counter.kicks==1 and f.counter.cleanups==0,"返回函数不当作卸载契约")
+    assert(not f.env.__RSZH_HUB)
+end)
+check("原生断开先于尽力注销请求",function()
+    local f=fixture();f.play();untilTrue(function()return f.counter.starts==1 end)
+    f.finish();untilTrue(function()return f.counter.deletes==1 end)
+    assert(f.counter.logoutSawKicks==1,"网络注销不应阻塞 Kick")
+end)
+check("初次 Key 错误仅拒绝加载",function()
+    local f=fixture({loginError="HUB_KEY_INVALID"});f.play();untilTrue(function()return pcall(f.find,"校验未完成")end)
+    assert(f.find("校验未完成") and #f.counter.kicks==0 and f.counter.loads==0)
+    f.close();assert(#f.counter.kicks==0)
+end)
+for _,code in ipairs({"HUB_SESSION_REPLACED","HUB_KEY_INVALID","HUB_LICENSE_REVOKED","HUB_LICENSE_EXPIRED","HUB_VIP_REQUIRED","HUB_SESSION_INVALID"})do
+    check("心跳失效 "..code,function()
+        local f=fixture({heartbeatError=code});f.play();f.close();untilTrue(function()return #f.counter.kicks==1 end)
+        assert(not f.env.__RSZH_HUB);task.wait(0.05);assert(#f.counter.kicks==1)
+    end)
 end
-assert(panel and search, "新版面板与搜索入口存在")
-panel.AbsoluteSize = rb.Vector2.new(340, 300)
-panel:GetPropertyChangedSignal("AbsoluteSize"):Fire()
-assert(panel.CanvasSize.Y.Offset >= 590, "窄屏保留完整可滚动内容")
-search.Text = "没有这个脚本"
-search:GetPropertyChangedSignal("Text"):Fire()
-assert(find("没有匹配的脚本").Visible ~= false, "无结果时展示空状态")
-search.Text = ""
-search:GetPropertyChangedSignal("Text"):Fire()
-find("校验 Key").Activated:Fire()
-task.wait(0.05)
-assert(counter.logins == 1)
-find("授权检查").Activated:Fire()
-task.wait(0.1)
-assert(counter.starts == 1)
-find("收起 Hub").Activated:Fire()
-assert(find("打开 Hub"), "收起后保留恢复入口")
-client()
-assert(counter.logins == 1, "重复入口不应新登录顶号")
-assert(find("收起 Hub"), "重复入口恢复现有界面")
-task.wait(1.4)
-assert(counter.stops == 1, "心跳挂起时看门狗仍须停止脚本")
-assert(find("租约已到期"), "晚到的成功心跳不应恢复已终止会话")
-local keyBox
-for _, item in ipairs(objects) do if item.PlaceholderText and item.PlaceholderText:find("Key 已清理", 1, true) then keyBox = item end end
-assert(keyBox)
-keyBox.Text = "RSH_" .. string.rep("b", 43)
-find("校验 Key").Activated:Fire()
-task.wait(0.05)
-server.delayLoad = 0.3
-find("授权检查").Activated:Fire()
-task.wait(0.05)
-find("停止脚本").Activated:Fire()
-task.wait(0.35)
-assert(counter.starts == 1, "停止后晚到的下载不应再执行")
-find("退出 Hub").Activated:Fire()
-task.wait(0.2)
-assert(not hubEnv.__RSZH_HUB, "退出后释放单实例占位")
-assert(counter.delete == 1, "界面关闭后仍须发送退出请求")
-client()
-assert(hubEnv.__RSZH_HUB)
-for _, item in ipairs(objects) do
-    if item.Name == "RSZH_Hub" and not item.destroyed then item:Destroy() end
-end
-assert(not hubEnv.__RSZH_HUB, "界面被外部销毁后也须释放占位")
-print("通过：真实客户端模拟登录、单实例、挂起心跳、看门狗、晚到响应与下载、退出清理")
+check("过期登录响应仅提示并注销，不误踢",function()
+    local f=fixture({lease=0});f.play()
+    untilTrue(function()return f.counter.deletes==1 end)
+    assert(f.find("登录响应已过期") and #f.counter.kicks==0 and f.counter.starts==0)
+end)
+check("未加载脚本的已登录会话也在失效时退出本局",function()
+    local f=fixture({heartbeatError="HUB_LICENSE_EXPIRED"});f.click("校验 Key")
+    untilTrue(function()return #f.counter.kicks==1 end);assert(f.counter.starts==0)
+end)
+check("独立看门狗与晚到心跳不复活",function()
+    local f=fixture({lease=0.25,delayHeartbeat=0.7,starveWatchdog=true});f.play();f.destroy()
+    untilTrue(function()return #f.counter.kicks==1 end)
+    assert(f.counter.kicks[1]:find("租约",1,true));task.wait(0.8)
+    assert(#f.counter.kicks==1 and f.counter.logins==1 and not f.env.__RSZH_HUB)
+end)
+check("短暂网络失败先重试，成功后保留本局",function()
+    local f=fixture({lease=4.5,networkHeartbeat=true});f.play();f.close()
+    untilTrue(function()return f.counter.heartbeats==1 end)
+    assert(#f.counter.kicks==0);f.server.networkHeartbeat=false
+    untilTrue(function()return f.counter.heartbeats>=2 end)
+    task.wait(0.03);assert(#f.counter.kicks==0 and f.env.__RSZH_HUB.alive)
+end)
+check("持续断网按原租约结束",function()
+    local f=fixture({lease=0.25,networkHeartbeat=true});f.play();f.destroy()
+    untilTrue(function()return #f.counter.kicks==1 end);assert(f.counter.kicks[1]:find("租约",1,true))
+end)
+check("加载接口发现授权失效立刻结束",function()
+    local f=fixture({loadError="HUB_SESSION_REPLACED"});f.play()
+    untilTrue(function()return #f.counter.kicks==1 end);assert(f.counter.starts==0)
+end)
+check("游戏权限不匹配不误踢",function()
+    local f=fixture({loadError="HUB_GAME_NOT_GRANTED"});f.play()
+    untilTrue(function()return pcall(f.find,"加载失败")end)
+    assert(#f.counter.kicks==0 and f.counter.starts==0 and f.find("加载失败"))
+end)
+check("下载期间关闭界面仍完成已请求的后台加载",function()
+    local f=fixture({delayLoad=0.3});f.play();untilTrue(function()return f.counter.loads==1 end)
+    f.close();untilTrue(function()return f.counter.starts==1 end)
+    assert(#f.counter.kicks==0 and f.counter.deletes==0 and f.owner.alive)
+    f.client();assert(f.find("运行中") and f.counter.loads==1 and f.counter.logins==1)
+end)
+check("登录期间关闭界面继续后台授权",function()
+    local f=fixture({delayLogin=0.2});f.click("校验 Key");f.close();task.wait(0.3)
+    assert(f.counter.deletes==0 and #f.counter.kicks==0 and f.owner.alive)
+    f.client();assert(f.find("授权有效"));f.click("校验 Key");task.wait(0.03)
+    assert(f.counter.logins==1)
+end)
+check("重试登录期间关闭界面不注销会话",function()
+    local f=fixture({delayLogin=0.1,loginNetworkOnce=true});f.click("校验 Key")
+    untilTrue(function()return f.counter.logins==2 end);f.close();task.wait(0.2)
+    assert(f.counter.deletes==0 and #f.counter.kicks==0 and f.owner.alive)
+    f.client();assert(f.find("授权有效"))
+end)
+check("编译期间清理界面不取消原脚本",function()
+    local f=fixture({closeDuringCompile=true});f.play()
+    untilTrue(function()return f.counter.starts==1 end)
+    assert(f.counter.deletes==0 and #f.counter.kicks==0 and f.owner.alive)
+    f.client();assert(f.find("运行中"))
+end)
+check("未运行时销毁界面保留已登录会话",function()
+    local f=fixture();f.click("校验 Key");untilTrue(function()return pcall(f.find,"授权有效")end)
+    f.destroy();untilTrue(function()return f.counter.heartbeats==1 end)
+    assert(f.counter.deletes==0 and #f.counter.kicks==0 and f.env.__RSZH_HUB==f.owner)
+    f.client();assert(f.find("授权有效") and f.counter.logins==1)
+end)
+check("运行后清理界面只释放视图，仍后台校验",function()
+    local f=fixture();f.play();untilTrue(function()return f.counter.starts==1 end)
+    f.destroy();untilTrue(function()return f.counter.heartbeats==1 end)
+    assert(#f.counter.kicks==0 and f.counter.deletes==0 and f.env.__RSZH_HUB==f.owner)
+    f.client();assert(f.find("运行中") and f.counter.starts==1)
+end)
+check("结束本局按钮明确断开游戏",function()
+    local f=fixture();f.click("结束本局");assert(#f.counter.kicks==1)
+end)
+check("编译失败不误踢且可重试",function()
+    local f=fixture({source="local ="});f.play();untilTrue(function()return pcall(f.find,"脚本编译失败")end)
+    assert(f.find("脚本编译失败") and #f.counter.kicks==0)
+    f.server.source=originalSource;f.play();untilTrue(function()return f.counter.starts==1 end)
+end)
+check("原脚本报错不自动踢人，后台授权监控继续",function()
+    local f=fixture({source="counters.starts += 1; task.wait(0.15); error('fixture script failure')"});f.play();f.close()
+    task.wait(0.3);assert(#f.counter.kicks==0 and f.owner.alive and f.counter.starts==1)
+    f.client();assert(f.find("脚本启动异常"));f.play();task.wait(0.02);assert(f.counter.starts==1)
+    f.finish();assert(#f.counter.kicks==1)
+end)
+check("原脚本启动挂起不阻止授权监控",function()
+    local f=fixture({source="counters.starts += 1; task.wait(0.8)",lease=0.25,delayHeartbeat=1});f.play()
+    untilTrue(function()return #f.counter.kicks==1 end);assert(f.counter.starts==1)
+end)
+check("无效心跳响应不续租",function()
+    local f=fixture({invalidHeartbeat=true,lease=0.6});f.play()
+    untilTrue(function()return f.counter.heartbeats==1 end);task.wait(0.1);assert(#f.counter.kicks==0)
+    untilTrue(function()return #f.counter.kicks==1 end);assert(f.counter.kicks[1]:find("租约",1,true))
+end)
+check("Kick 报错不伪报成功，停止加载与续租",function()
+    local f=fixture({heartbeatError="HUB_SESSION_REPLACED",kickFails=true});f.play()
+    untilTrue(function()return #f.counter.warnings==1 end);assert(f.find("请立即手动离开本局"))
+    local logins,loads,heartbeats=f.counter.logins,f.counter.loads,f.counter.heartbeats
+    f.click("校验 Key");f.play();task.wait(0.3)
+    assert(f.counter.logins==logins and f.counter.loads==loads and f.counter.heartbeats==heartbeats and #f.counter.kicks==1)
+end)
+check("关闭界面后顶号仍只结束一次本局",function()
+    local f=fixture({heartbeatError="HUB_SESSION_REPLACED"});f.play();f.destroy()
+    untilTrue(function()return #f.counter.kicks==1 end)
+    assert(f.counter.kicks[1]:find("其他实例或设备",1,true));task.wait(0.1);assert(#f.counter.kicks==1)
+end)
+check("原脚本启动时自行清理 Hub UI 不误踢",function()
+    local f=fixture({source="counters.starts += 1; counters.clearUI()"});f.play()
+    untilTrue(function()return f.counter.starts==1 end)
+    assert(f.owner.alive and #f.counter.kicks==0 and f.counter.deletes==0)
+    f.client();assert(f.find("运行中") and f.counter.starts==1 and f.counter.logins==1)
+end)
+check("多次销毁恢复不重复登录、加载、目录或监控",function()
+    local f=fixture();f.play();untilTrue(function()return f.counter.starts==1 end)
+    for i=1,5 do if i%2==0 then f.close()else f.destroy()end;f.client()end
+    untilTrue(function()return f.counter.heartbeats>=1 end);task.wait(0.3)
+    assert(f.counter.heartbeats==1 and f.counter.logins==1 and f.counter.loads==1 and f.counter.starts==1 and f.counter.catalogs==1)
+    assert(f.env.__RSZH_HUB==f.owner and #f.counter.kicks==0 and f.counter.deletes==0)
+end)
+check("界面恢复失败不终止授权，恢复后可继续操作",function()
+    local f=fixture();f.play();untilTrue(function()return f.counter.starts==1 end);f.close()
+    f.server.guiUnavailable=true;f.client()
+    assert(f.owner.alive and #f.counter.kicks==0 and #f.counter.warnings==1)
+    untilTrue(function()return f.counter.heartbeats==1 end)
+    f.server.guiUnavailable=false;f.client();assert(f.find("运行中"));f.finish()
+end)
+check("并发恢复界面只创建一份视图",function()
+    local f=fixture();f.play();untilTrue(function()return f.counter.starts==1 end);f.close()
+    f.server.guiDelay=0.2
+    task.spawn(f.client);task.wait(0.03);f.client();task.wait(0.25)
+    local active=0;for _,o in ipairs(f.objects)do if o.Name=="RSZH_Hub" and not o.destroyed then active+=1 end end
+    assert(active==1 and f.counter.guiLookups==2 and f.counter.logins==1 and f.counter.catalogs==1 and #f.counter.kicks==0)
+end)
+check("界面恢复等待期间租约仍按时耗尽",function()
+    local f=fixture({lease=0.25,networkHeartbeat=true});f.play();untilTrue(function()return f.counter.starts==1 end);f.destroy()
+    f.server.guiDelay=0.6;f.client()
+    assert(#f.counter.kicks==1 and not f.owner.alive and not f.env.__RSZH_HUB)
+    local active=0;for _,o in ipairs(f.objects)do if o.Name=="RSZH_Hub" and not o.destroyed then active+=1 end end
+    assert(active==0,"结束后晚到的 UI 不复活")
+end)
+check("初次目录返回时界面已删除，恢复时复用目录",function()
+    local f=fixture({destroyDuringCatalog=true});assert(f.owner.alive and #f.counter.kicks==0)
+    f.client();assert(f.find("授权检查") and f.counter.catalogs==1)
+end)
+check("手动结束后不执行晚到下载",function()
+    local f=fixture({delayLoad=0.4});f.play();untilTrue(function()return f.counter.loads==1 end);f.finish()
+    task.wait(0.5);assert(f.counter.starts==0 and #f.counter.kicks==1)
+end)
+check("手动结束后晚到的登录会话仍注销",function()
+    local f=fixture({delayLogin=0.2});f.play();f.finish()
+    untilTrue(function()return f.counter.deletes==1 end)
+    assert(#f.counter.kicks==1 and f.counter.starts==0 and not f.env.__RSZH_HUB)
+end)
+check("手动结束后晚到的重试登录会话仍注销",function()
+    local f=fixture({delayLogin=0.1,loginNetworkOnce=true});f.click("校验 Key")
+    untilTrue(function()return f.counter.logins==2 end);f.finish()
+    untilTrue(function()return f.counter.deletes==1 end);assert(#f.counter.kicks==1)
+end)
+check("编译期间手动结束仍拒绝执行函数",function()
+    local f=fixture({endDuringCompile=true});f.play();untilTrue(function()return #f.counter.kicks==1 end)
+    assert(f.counter.starts==0)
+end)
+check("界面关闭时 Kick 失败仍输出明确警告",function()
+    local f=fixture({heartbeatError="HUB_SESSION_REPLACED",kickFails=true});f.play();f.close()
+    untilTrue(function()return #f.counter.warnings==1 end)
+    assert(not f.owner.alive and #f.counter.kicks==1 and f.counter.warnings[1]:find("手动离开",1,true))
+end)
+check("缺少结束游戏能力时不加载",function()
+    local f=fixture({missingKick=true});assert(f.counter.logins==0 and f.counter.loads==0)
+end)
+check("旧策略单例要求重新进入游戏",function()
+    local f=fixture({legacyHub=true});assert(f.counter.logins==0 and f.counter.loads==0)
+end)
+print("通过："..passed.." 项界面/监控解耦、原样加载、授权失效断开与竞态回归；Kick 为本地替身")
+
+-- 模拟 Kick 不销毁测试 VM；仅在全部检查通过后结束夹具进程，不宣称回收原脚本任务。
+process.exit(0)
