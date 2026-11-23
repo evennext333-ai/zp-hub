@@ -203,7 +203,7 @@ local function buildView(uiContext)
     local function object(className, properties, parent)
         local item = Instance.new(className)
         if className == "TextButton" then item.Style = Enum.ButtonStyle.Custom end
-        if className == "Frame" or className == "ScrollingFrame" or className == "TextLabel" or className == "TextButton" or className == "TextBox" then
+        if className == "Frame" or className == "ScrollingFrame" or className == "TextLabel" or className == "TextButton" or className == "TextBox" or className == "ImageLabel" then
             item.AnchorPoint = Vector2.new(0, 0)
             item.AutomaticSize = Enum.AutomaticSize.None
             item.SizeConstraint = Enum.SizeConstraint.RelativeXY
@@ -295,11 +295,19 @@ local function buildView(uiContext)
     local loginButton = button(authorization, "ValidateKey", "校验 Key", true)
     local kindLabel = text(authorization, "EntitlementKind", "", 16)
     kindLabel.Font = Enum.Font.GothamMedium
-    local expiryLabel = text(authorization, "ExpiryLabel", "到期时间 · 北京时间", 11, colors.muted)
+    local expiryLabel = text(authorization, "ExpiryLabel", "剩余有效期", 11, colors.muted)
     local expiryValue = text(authorization, "ExpiryValue", "", 14)
     local grantNote = text(authorization, "GrantNote", "", 12, colors.muted)
     local libraryTitle = text(panel, "LibraryTitle", "脚本库", 18)
     libraryTitle.Font = Enum.Font.GothamBold
+    libraryTitle.TextSize, libraryTitle.TextWrapped = 16, false
+    local gameNameEn = text(panel, "CurrentGameNameEn", "游戏资料待同步", 12, colors.muted)
+    gameNameEn.TextWrapped = false
+    local gamePlaceholder = rounded(text(panel, "CurrentGamePlaceholder", "游戏", 12, colors.muted), 9)
+    gamePlaceholder.BackgroundTransparency, gamePlaceholder.BackgroundColor3 = 0, colors.surface
+    gamePlaceholder.TextXAlignment, gamePlaceholder.TextYAlignment = Enum.TextXAlignment.Center, Enum.TextYAlignment.Center
+    local gameImage = rounded(object("ImageLabel", { Name = "CurrentGameImage", BackgroundTransparency = 1, BorderSizePixel = 0,
+        ScaleType = Enum.ScaleType.Fit, Image = "", ZIndex = 3 }, panel), 9)
     local operationStatus = text(panel, "OperationStatus", "选择脚本后手动加载", 12, colors.muted)
     local countLabel = text(panel, "ScriptCount", "正在同步目录", 12, colors.muted)
     countLabel.TextXAlignment = Enum.TextXAlignment.Right
@@ -386,6 +394,18 @@ local function buildView(uiContext)
         if notGranted(script) then setStatus("此 Key 未包含该游戏，请使用覆盖该脚本的 Key") return end
         task.spawn(run, script)
     end
+    local function updateRemaining()
+        if not entitlement then return end
+        local seconds = nil
+        if entitlement.expiresAt ~= nil then
+            local ok, value = pcall(function()
+                return (DateTime.fromIsoDate(entitlement.expiresAt).UnixTimestampMillis - DateTime.now().UnixTimestampMillis) / 1000
+            end)
+            seconds = ok and value or "invalid"
+        end
+        expiryValue.Text = Runtime.remaining(seconds)
+    end
+    connect(gameImage:GetPropertyChangedSignal("IsLoaded"), function() gamePlaceholder.Visible = not gameImage.IsLoaded end)
     currentView.refresh = function()
         status.Text = statusMessage
         local verified = token ~= nil and entitlement ~= nil
@@ -398,7 +418,7 @@ local function buildView(uiContext)
         kindLabel.Visible, expiryLabel.Visible, expiryValue.Visible, grantNote.Visible = verified, verified, verified, verified
         if verified then
             kindLabel.Text = entitlement.kind == "MEMBER" and "全游戏会员" or "单游戏 · 30 天"
-            expiryValue.Text = Runtime.formatExpiry(entitlement.expiresAt)
+            updateRemaining()
             grantNote.Text = entitlement.kind == "MEMBER" and "当前游戏及通用脚本\n关闭界面仍持续校验" or "仅限绑定游戏\n关闭界面仍持续校验"
         end
         operationStatus.Text = verified and statusMessage or "先完成 Key 校验，再选择脚本"
@@ -460,9 +480,12 @@ local function buildView(uiContext)
         place(expiryLabel, 14, layout.compact and 78 or 90, inner, 18)
         place(expiryValue, 14, layout.compact and 102 or 114, inner, 24)
         place(grantNote, 14, layout.compact and 140 or 158, inner, 40)
-        place(libraryTitle, layout.left, layout.mainTop, layout.mainWidth - 112, 26)
+        place(gamePlaceholder, layout.left, layout.mainTop, 44, 44)
+        place(gameImage, layout.left, layout.mainTop, 44, 44)
+        place(libraryTitle, layout.left + 56, layout.mainTop, layout.mainWidth - 168, 24)
+        place(gameNameEn, layout.left + 56, layout.mainTop + 26, layout.mainWidth - 56, 18)
         place(countLabel, layout.left + layout.mainWidth - 100, layout.mainTop + 4, 100, 20)
-        place(operationStatus, layout.left, layout.mainTop + 30, layout.mainWidth, 28)
+        place(operationStatus, layout.left, layout.mainTop + 48, layout.mainWidth, 18)
         place(list, layout.left, layout.gridTop, layout.mainWidth, layout.gridHeight)
         for index, section in ipairs({currentSection, universalSection}) do
             local height = index == 1 and layout.currentHeight or layout.universalHeight
@@ -534,6 +557,12 @@ local function buildView(uiContext)
             end
         end
         countLabel.Text = tostring(#cards) .. " 个脚本"
+        local currentGame = Runtime.currentGame(catalog, game.GameId, game.PlaceId)
+        libraryTitle.Text = currentGame and type(currentGame.nameZh) == "string" and currentGame.nameZh ~= "" and currentGame.nameZh or "当前游戏"
+        gameNameEn.Text = currentGame and type(currentGame.nameEn) == "string" and currentGame.nameEn ~= "" and currentGame.nameEn or "英文名称未配置"
+        if not currentGame then gameNameEn.Text = "游戏资料待同步" end
+        gameImage.Image = game.GameId > 0 and ("rbxthumb://type=GameIcon&id=" .. tostring(game.GameId) .. "&w=150&h=150") or ""
+        gamePlaceholder.Visible = not gameImage.IsLoaded
         currentView.refresh()
         fit()
     end
@@ -543,6 +572,14 @@ local function buildView(uiContext)
     connect(gui.Destroying, closeUI)
     currentView.render = render
     render()
+    local remainingTask = task.spawn(function()
+        while uiContext.alive do
+            local ok = pcall(updateRemaining)
+            if not ok then closeUI() warn("[ZS Hub] 界面更新失败，请重新加载入口；后台授权监控继续") return end
+            task.wait(1)
+        end
+    end)
+    uiContext.onCleanup(function() pcall(task.cancel, remainingTask) end)
     assert(gui.Parent == guiParent, "界面创建期间已被清理")
     return currentView
 end

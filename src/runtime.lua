@@ -87,7 +87,7 @@ function Runtime.layout(availableWidth, availableHeight, count, universalCount)
     local currentHeight, universalHeight = sectionHeight(count), sectionHeight(universalCount)
     local gridContentHeight = currentHeight + 16 + universalHeight
     local mainTop = compact and 64 or 80
-    local gridTop, footerY = mainTop + 64, height - 62
+    local gridTop, footerY = mainTop + 72, height - 62
     return { width = width, height = height, scale = scale, pad = pad, gap = gap,
         cardHeight = cardHeight, compact = compact, left = left, mainWidth = mainWidth,
         mainTop = mainTop, gridTop = gridTop, columns = columns, cellWidth = cellWidth,
@@ -101,24 +101,26 @@ function Runtime.scenario(script)
     return value ~= "" and value or "未设置场景"
 end
 
--- 后端日期为 UTC ISO；只调整展示，不参与授权或租约判断。
-function Runtime.formatExpiry(value)
-    if value == nil then return "长期有效" end
-    if type(value) ~= "string" then return "时间待同步" end
-    local y, m, d, h, minute, second, tail = value:match("^(%d%d%d%d)%-(%d%d)%-(%d%d)T(%d%d):(%d%d):(%d%d)(.-)Z$")
-    if not y or (tail ~= "" and not tail:match("^%.%d+$")) then return "时间待同步" end
-    y, m, d, h, minute, second = tonumber(y), tonumber(m), tonumber(d), tonumber(h), tonumber(minute), tonumber(second)
-    local days = {31, (y % 4 == 0 and (y % 100 ~= 0 or y % 400 == 0)) and 29 or 28, 31,30,31,30,31,31,30,31,30,31}
-    if y < 1 or m < 1 or m > 12 or d < 1 or d > days[m] or h > 23 or minute > 59 or second > 59 then return "时间待同步" end
-    h += 8
-    if h >= 24 then
-        h -= 24
-        d += 1
-        if d > days[m] then d, m = 1, m + 1 end
-        if m > 12 then m, y = 1, y + 1 end
+-- 此处仅格式化展示，不用于授权或租约判断。
+function Runtime.remaining(seconds)
+    if seconds == nil then return "长期有效" end
+    if type(seconds) ~= "number" or seconds ~= seconds or math.abs(seconds) == math.huge then return "时间待同步" end
+    if seconds <= 0 then return "已到期" end
+    if seconds >= 86400 then return "剩余 " .. math.floor(seconds / 86400) .. " 天" end
+    if seconds >= 3600 then return "剩余 " .. math.floor(seconds / 3600) .. " 小时" end
+    if seconds >= 60 then return "剩余 " .. math.floor(seconds / 60) .. " 分钟" end
+    return "剩余不足 1 分钟"
+end
+
+function Runtime.currentGame(scripts, universeId, placeId)
+    local selected, score = nil, math.huge
+    for _, script in ipairs(scripts) do
+        local rank = Runtime.rank(script, universeId, placeId)
+        if not script.universal and rank <= 1 and rank < score and type(script.game) == "table" and script.game.id == script.gameId then
+            selected, score = script.game, rank
+        end
     end
-    if y > 9999 then return "时间待同步" end
-    return string.format("%04d-%02d-%02d %02d:%02d", y, m, d, h, minute)
+    return selected
 end
 
 function Runtime.deadline(sentAt, remaining)

@@ -2,6 +2,7 @@ local fs = require("@lune/fs")
 local luau = require("@lune/luau")
 local rb = require("@lune/roblox")
 local serde = require("@lune/serde")
+local datetime = require("@lune/datetime")
 local task = require("@lune/task")
 local process = require("@lune/process")
 local Runtime = luau.load(fs.readFile("src/runtime.lua"))()
@@ -17,7 +18,7 @@ local function fixture(options)
     options = options or {}
     local objects, threads = {}, {}
     local counter = {logins=0, loads=0, heartbeats=0, deletes=0, loadIds={}, catalogs=0, guiLookups=0, starts=0, cleanups=0, kicks={}, warnings={}, sources={}}
-    local server = {source=options.source or originalSource, lease=options.lease or 90,
+    local server = {nowMillis=datetime.fromIsoDate("2027-04-08T16:00:00Z").unixTimestampMillis,source=options.source or originalSource, lease=options.lease or 90,
         delayLogin=options.delayLogin or 0, delayLoad=options.delayLoad or 0,
         delayHeartbeat=options.delayHeartbeat or 0, loginError=options.loginError,
         loadError=options.loadError, heartbeatError=options.heartbeatError,
@@ -61,6 +62,10 @@ local function fixture(options)
             end,
         })
         data.CaptureFocus=function()counter.focusedKeyInput=true end
+        data.MockSetLoaded=function(value)
+            data.IsLoaded=value
+            if data.signals.IsLoaded then data.signals.IsLoaded:Fire() end
+        end
         data.GetPropertyChangedSignal=function(_,name)
             if not data.signals[name] then data.signals[name]=signal() end
             return data.signals[name]
@@ -115,6 +120,8 @@ local function fixture(options)
     }
     local environment = {
         Runtime=Runtime,API="https://TARGET",task=taskShim,counters=counter,
+        DateTime={fromIsoDate=function(value)return {UnixTimestampMillis=datetime.fromIsoDate(value).unixTimestampMillis}end,
+            now=function()counter.dateReads=(counter.dateReads or 0)+1;return {UnixTimestampMillis=server.nowMillis}end},
         game={GameId=1,PlaceId=2,GetService=function(_,name)return services[name]end},
         getgenv=function()return hubEnv end,gethwid=function()return "fixture-device" end,
         Instance={new=create},UDim2=rb.UDim2,UDim=rb.UDim,Vector2=rb.Vector2,Color3=rb.Color3,Enum=rb.Enum,
@@ -227,7 +234,7 @@ if process.env.HUB_UI_PREVIEW_DIR then
         local sample={}
         local names={"资源收集助手","地图快捷导航","角色状态面板","画面与性能设置","采集路径标记","通用界面工具"}
         local descriptions={"资源采集 / 日常任务","地图探索 / 快捷导航","角色状态 / 任务追踪","画面调整 / 性能优化","路线标记 / 兴趣点","通用工具 / 界面管理"}
-        for index,name in ipairs(names) do table.insert(sample,{id="hall-"..index,gameId="preview",nameZh=name,nameEn="Preview "..index,scenario=descriptions[index],shortDescription="不应显示简介",enabled=true,universal=index>3,placeIds=index<=3 and {2} or {},universeIds={},aliases={},tags={}}) end
+        for index,name in ipairs(names) do table.insert(sample,{id="hall-"..index,gameId="preview",nameZh=name,nameEn="Preview "..index,scenario=descriptions[index],shortDescription="不应显示简介",enabled=true,universal=index>3,game={id="preview",nameZh="游戏布局示例",nameEn="Game Preview"},placeIds=index<=3 and {2} or {},universeIds={},aliases={},tags={}}) end
         local cases={{"pc",1440,900,1040,720},{"tablet",1024,768,962,691},{"phone",844,390,793,311},{"landscape",667,375,627,297},{"pc-member",1440,900,1040,720,"MEMBER"},{"phone-member",844,390,793,311,"MEMBER"},{"phone-game",844,390,793,311,"GAME"}}
         local output=process.env.HUB_UI_PREVIEW_DIR
         fs.writeDir(output)
@@ -331,11 +338,11 @@ end)
 check("授权卡片分状态展示，恢复后保留格式化权益",function()
     local f=fixture({kind="MEMBER",expiresAt="2027-04-08T16:05:33.375Z"})
     assert(f.byName("AuthBadge").Text=="已校验" and f.byName("EntitlementKind").Text=="全游戏会员")
-    assert(f.byName("ExpiryValue").Text=="2027-04-09 00:05")
-    assert(f.byName("ExpiryLabel").Text=="到期时间 · 北京时间")
+    assert(f.byName("ExpiryValue").Text=="剩余 5 分钟")
+    assert(f.byName("ExpiryLabel").Text=="剩余有效期")
     assert(not f.byName("KeyInput").Visible and not f.byName("ValidateKey").Visible and not f.byName("SessionStatus").Visible)
     f.destroy();f.client()
-    assert(f.byName("ExpiryValue").Text=="2027-04-09 00:05" and f.counter.logins==1)
+    assert(f.byName("ExpiryValue").Text=="剩余 5 分钟" and f.counter.logins==1)
     assert(f.byName("EntitlementKind").Visible and not f.byName("KeyInput").Visible)
     local empty=fixture({noKey=true})
     assert(empty.byName("AuthBadge").Text=="未校验" and empty.byName("KeyInput").Visible)
@@ -348,14 +355,14 @@ check("后续心跳更新权益日期，不重复登录或影响租约",function
     local options={kind="MEMBER",expiresAt="2027-04-08T16:05:33.375Z",fastHeartbeats=true}
     local f=fixture(options)
     options.expiresAt="2027-05-01T00:00:00.000Z"
-    untilTrue(function()return f.byName("ExpiryValue").Text=="2027-05-01 08:00"end)
+    untilTrue(function()return f.byName("ExpiryValue").Text=="剩余 22 天"end)
     assert(f.counter.logins==1 and f.counter.loads==0 and #f.counter.kicks==0)
 end)
 check("长期会员和单游戏到期展示不改变后台截止时间",function()
     local member=fixture({kind="MEMBER"})
     assert(member.byName("ExpiryValue").Text=="长期有效")
-    local game=fixture({expiresAt="2027-01-01T00:00:00.000Z"})
-    assert(game.byName("EntitlementKind").Text=="单游戏 · 30 天" and game.byName("ExpiryValue").Text=="2027-01-01 08:00")
+    local game=fixture({expiresAt="2027-04-10T16:00:00.000Z"})
+    assert(game.byName("EntitlementKind").Text=="单游戏 · 30 天" and game.byName("ExpiryValue").Text=="剩余 2 天")
 end)
 local universalCatalog={
     {id="hall-7",gameId="demo",nameZh="授权检查",nameEn="Current",enabled=true,universal=false,placeIds={2},universeIds={1},tags={},aliases={},scenario="当前场景"},
@@ -410,6 +417,46 @@ check("界面刷新异常只关闭视图，不中止后台授权心跳",function
     assert(f.owner.alive and #f.counter.kicks==0 and f.counter.deletes==0)
     f.server.uiWriteError=false;f.client()
     assert(f.byName("AuthBadge").Text=="已校验" and f.counter.logins==1)
+end)
+check("剩余时间随 UI 计时刷新，壁钟变化不改租约或结束本局",function()
+    local f=fixture({expiresAt="2027-04-08T16:02:00Z"})
+    assert(f.byName("ExpiryValue").Text=="剩余 2 分钟")
+    f.server.nowMillis+=75000
+    untilTrue(function()return f.byName("ExpiryValue").Text=="剩余不足 1 分钟"end)
+    f.server.nowMillis+=60000
+    untilTrue(function()return f.byName("ExpiryValue").Text=="已到期"end)
+    assert(#f.counter.kicks==0 and f.owner.alive,"展示时间不代替服务端和单调时钟授权判断")
+    f.close();local reads=f.counter.dateReads;task.wait(1.1)
+    assert(f.counter.dateReads==reads,"关闭界面后 UI 计时器释放")
+    f.client();assert(f.byName("ExpiryValue").Text=="已到期" and f.counter.logins==1)
+end)
+check("无效日期只提示待同步，不影响授权和脚本加载",function()
+    local f=fixture({expiresAt="invalid"})
+    assert(f.byName("ExpiryValue").Text=="时间待同步" and f.byName("AuthBadge").Text=="已校验")
+    f.play();untilTrue(function()return f.counter.starts==1 end)
+end)
+check("当前游戏头部使用独立中英文资料和原生图标",function()
+    local entry={id="hall-7",gameId="demo",nameZh="授权检查",nameEn="Script",enabled=true,placeIds={2},universeIds={1},scenario="场景",aliases={"不应作为游戏名"},tags={},
+        game={id="demo",nameZh="中文游戏",nameEn="English Game",imageUrl="https://tr.rbxcdn.com/icon.png"}}
+    local f=fixture({catalog={entry}})
+    assert(f.byName("LibraryTitle").Text=="中文游戏" and f.byName("CurrentGameNameEn").Text=="English Game")
+    assert(f.byName("CurrentGameImage").Image=="rbxthumb://type=GameIcon&id=1&w=150&h=150")
+    assert(f.byName("CurrentGamePlaceholder").Visible,"图片加载前保留占位")
+    f.byName("CurrentGameImage").MockSetLoaded(true)
+    assert(not f.byName("CurrentGamePlaceholder").Visible,"图像就绪后隐藏占位")
+    for _,screen in ipairs({{1040,720},{793,311},{627,297}})do
+        f.resize(screen[1],screen[2])
+        local image,title,en,status,list=f.byName("CurrentGameImage"),f.byName("LibraryTitle"),f.byName("CurrentGameNameEn"),f.byName("OperationStatus"),f.byName("ScriptGrid")
+        assert(image.Position.X.Offset+image.Size.X.Offset<title.Position.X.Offset)
+        assert(title.Position.X.Offset+title.Size.X.Offset<=f.byName("ScriptCount").Position.X.Offset)
+        assert(en.Position.Y.Offset+en.Size.Y.Offset<=status.Position.Y.Offset and status.Position.Y.Offset+status.Size.Y.Offset<list.Position.Y.Offset)
+    end
+    f.destroy();f.client();assert(f.byName("LibraryTitle").Text=="中文游戏" and f.counter.catalogs==1)
+end)
+check("旧目录和未配置游戏名不从脚本标题或通用项猜测",function()
+    local f=fixture()
+    assert(f.byName("LibraryTitle").Text=="当前游戏" and f.byName("CurrentGameNameEn").Text=="游戏资料待同步")
+    assert(f.counter.catalogs==1 and f.counter.loads==0)
 end)
 check("按钮中心锚点的偏移回归",function()
     local f=fixture({centeredButtons=true})

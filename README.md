@@ -43,7 +43,7 @@ Key 页请求头回归测试在本地与 CI 直接运行；真实 API 的 DOM �
 
 ```sh
 python3 /Users/lvjunling/work_space/flutter/persor/zp-hub/build.py \
-  --output /tmp/zp-hub-assets-1.3.0
+  --output /tmp/zp-hub-assets-1.4.0
 ```
 
 默认 API 是 `https://www.zldelf.cloud/api`，也可显式传 `--api-url`；根地址与 `/api` 前缀都支持，不生成重复 `/api/api`。
@@ -56,8 +56,8 @@ python3 /Users/lvjunling/work_space/flutter/persor/zp-hub/build.py \
 python3 /Users/lvjunling/work_space/flutter/persor/zp-hub/build.py \
   --prometheus-dir /tmp/prometheus \
   --lua-bin lua5.1 \
-  --output /tmp/zp-hub-assets-obfuscated-1.3.0
-HUB_TEST_LOADER=/tmp/zp-hub-assets-obfuscated-1.3.0/loader.lua \
+  --output /tmp/zp-hub-assets-obfuscated-1.4.0
+HUB_TEST_LOADER=/tmp/zp-hub-assets-obfuscated-1.4.0/loader.lua \
   lune run /Users/lvjunling/work_space/flutter/persor/zp-hub/tests/test_client.luau
 ```
 
@@ -71,7 +71,17 @@ HUB_TEST_LOADER=/tmp/zp-hub-assets-obfuscated-1.3.0/loader.lua \
 
 本仓库 Key 网页保留为会员自助与旧链接兼容入口，会员领取/重置仍使用用户端登录态；管理员 JWT 不代替会员授权。网页权益改为可读卡片，服务端文本只作为文本节点渲染；明文 Key 仍仅在生成时显示，不写本地存储。管理后台页面详见 `/Users/lvjunling/work_space/flutter/persor/zldelf-admin/docs/hub-keys.md`。
 
-## 1.3.0 授权卡片与脚本分区
+## 1.4.0 剩余有效期与当前游戏
+
+- 授权卡片显示「剩余有效期」：至少一天显示完整天数，不足一天显示完整小时，不足一小时显示完整分钟；不足一分钟显示「剩余不足 1 分钟」，到期显示「已到期」，永久会员「长期有效」，无效日期「时间待同步」。
+- 用既有 entitlementExpiresAt 和 Roblox DateTime 的 UTC Unix 时间计算展示，每秒仅刷新时间文本。计时器属于 UI 作用域，关闭/销毁即停止，恢复后重新计算，不重复登录。显示时间跳变不触发结束本局；服务端到期校验、单调时钟租约与看门狗原样保留。
+- 原「脚本库」位置显示 44×44 当前游戏图标、中文名、英文名和脚本数量，运行状态放其下方，三端保持横版三列。目录每项兼容新增 game: {id,nameZh,nameEn,imageUrl,robloxUrl}，名称直接来自 Game 行，不从脚本名、别名或通用项猜测。
+- 优先匹配 Place，其次 Universe。同游戏其他地图可展示游戏身份，但不扩大可执行范围。旧目录/没有当前游戏上架关联条目时显示「当前游戏 / 游戏资料待同步」；英文为空显示「英文名称未配置」。
+- 图像采用 rbxthumb://type=GameIcon&id=<game.GameId>&w=150&h=150；原 imageUrl 作为资料返回，不把裸 CDN 当成图像资产，不增加文件下载权限或图片代理。图像未加载时显示占位，不阻塞授权和加载。[Roblox 资产 URI](https://create.roblox.com/docs/projects/assets)
+- 本轮发布 Hub 并同步目录展示字段：无新迁移、不改路由/旧字段/授权服务/账号/Key/原脚本/启用状态，暴力区仍未启用。旧客户端忽略新字段，新客户端兼容旧目录；升级先重新进入游戏。
+- 回归覆盖天/时/分临界、日期异常、UI 计时与清理、壁钟变化不误踢、心跳更新权益、双语游戏名、原生图标 URI 与占位、旧目录/跨地图/三端布局。实际图片加载和 Roblox 断开仍需真机验收。
+
+## 1.3.0 授权卡片与脚本分区（历史日期展示，已由 1.4.0 替换）
 
 - 未校验：显示状态、Key 输入和校验按钮；校验中禁用输入及按钮，显示「正在校验…」；错误后恢复输入，展示原因。
 - 已校验：显示「已校验」文字及颜色、会员/单游戏权益、到期时间和后台校验提示；隐藏输入框、校验按钮和「Key 已清理」内部说明。永久权益显示「长期有效」，无效日期显示「时间待同步」。
@@ -136,7 +146,7 @@ Hub 的目录和脚本内容直接来自后端原脚本大厅数据库，不读�
 ```dotenv
 HUB_ENABLED=true
 HUB_SECRET=<保留现有至少32字节的密钥>
-HUB_PUBLIC_DIR=/srv/zp-hub/public/1.3.0
+HUB_PUBLIC_DIR=/srv/zp-hub/public/1.4.0
 ```
 
 `HUB_PUBLIC_DIR` 只包含本仓库四个公共资源和 `hub.json`；没有游戏脚本或游戏目录清单。后端校验公共文件大小、路径和摘要后托管。只更新公共客户端时切换此目录并重启或滚动发布；修改脚本大厅内容与状态无需重启或重新构建 Hub。
@@ -156,7 +166,7 @@ https://github.com/evennext333-ai/zp-hub/releases/latest/download/loader.lua
 1. 远端使用 `git@github.com:evennext333-ai/zp-hub.git`，主分支为 `main`。推送已审查的源码和工作流后，再推送版本标签触发发布；仅推送 `main` 不会创建 Release，文档地址不是已上线的证明。
 2. 主入口供 `game:HttpGet` 匿名访问，发布仓库须公开。公开仓库也会公开明文源码及历史；混淆 Release 附件不隐藏源码。私有仓库的 Release 需要认证，不适合作为这个公开加载入口。发布前先确认源码公开策略。
 3. 不再使用跨仓库 PAT 或 `HUB_RELEASE_TOKEN`。构建任务保持 `contents: read`；只有发布任务使用内置 `GITHUB_TOKEN` 和 `contents: write`。发布任务限定在 `evennext333-ai/zp-hub`，其他仓库和 fork 只构建。[GitHub 内置令牌与权限说明](https://docs.github.com/en/actions/tutorials/authenticate-with-github_token)
-4. 检查 `VERSION`，在本仓库创建并推送匹配标签，例如版本 `1.3.0` 对应 `hub-v1.3.0`；也可手动指定已存在的匹配标签。工作流显式检出标签而非默认分支。
+4. 检查 `VERSION`，在本仓库创建并推送匹配标签，例如版本 `1.4.0` 对应 `hub-v1.4.0`；也可手动指定已存在的匹配标签。工作流显式检出标签而非默认分支。
 5. 测试与混淆完成后，构建任务输出 `hub-server-assets`（四个公共资源和 hub.json，供 Key 页部署及旧后端加载链接兼容）和 `hub-public`（`loader.lua`、`NOTICE.txt`、`SHA256SUMS`）。两份混淆加载器逐字节一致。
 6. 发布任务校验附件白名单与 SHA256，在同一仓库要求标签已经存在，以实际构建提交为来源创建草稿，附件上传成功后才公开并标记为 latest。已存在的 Release 不覆盖，失败后检查草稿和产物，处理后再运行。[GitHub CLI 标签校验说明](https://cli.github.com/manual/gh_release_create)
 
@@ -198,7 +208,7 @@ Hub 不再携带默认游戏清单或验证脚本包。普通大厅脚本默认�
 - 卡片缩短为紧凑 144 / 常规 156 逻辑像素，采用小场景分类、左侧强调线和右下加载动作，移除大色块徽标与整圈强调边框。
 - 仅脚本卡片区滚动，窗口不再整窗滚动；横版紧凑窗口缩短授权区与卡片。空状态不放在 UIGridLayout 中，避免占用卡片位置。按钮/输入框至少 44 逻辑像素高，整体缩放后的字体和触控仍需真机验收。
 - 本轮采用 Roblox 原生 UIGridLayout，未引入第三方 UI 运行时下载。开源库候选：WindUI（MIT，项目标注 Beta，适合现成 Hub 组件）、Fusion（MIT，适合自定义响应式 UI）。将来引入时需固定版本、离线打包、保留许可证，界面卸载仅释放视图资源。
-- API 根地址、目录/加载请求路径、Key、HWID、心跳、租约、原脚本正文和手动结束本局行为均不变。scenario 为现有兼容字段，本轮无数据库迁移且不部署后端；客户端仍兼容缺少场景字段的旧目录。
+- API 根地址、目录/加载请求路径、Key、HWID、心跳、租约、原脚本正文和手动结束本局行为均不变。scenario 为现有兼容字段，本轮无数据库迁移，后端只兼容新增 game 展示字段；客户端仍兼容旧目录。
 - 测试覆盖 1040×720 PC、962×691 平板、793×351 手机横屏、627×337 小屏手机及 640×300 短窗口，包含 Roblox 反射属性赋值校验、非零锚点回归、缩放后矩形边界、拖动/触控独占与清理、场景字段和原授权竞态。当前不维护手机竖屏版。
 
 可选导出使用合成目录数据的控件树，供布局预览工具读取（不是 Roblox 实机截图）：
@@ -207,11 +217,11 @@ Hub 不再携带默认游戏清单或验证脚本包。普通大厅脚本默认�
 HUB_UI_PREVIEW_DIR=/tmp/zp-hub-ui-scenes lune run tests/test_client.luau
 ```
 
-当前构建版本为 `1.3.0`。本地构建不自动推送、部署或创建 GitHub Release；本轮只发布 Hub，不部署后端，原 API 与加载入口保持不变。已运行旧 UI 的游戏实例继续使用旧视图，重新进入游戏后再加载新版；不为界面升级打断现有授权会话。
+当前构建版本为 `1.4.0`。本地构建不自动推送、部署或创建 GitHub Release；本轮发布 Hub 并同步目录展示字段，原 API 路径、授权与加载入口保持不变。已运行旧 UI 的游戏实例继续使用旧视图，重新进入游戏后再加载新版；不为界面升级打断现有授权会话。
 
 
 ### 真实界面显示回归
 
 上一版合成预览将未设置的 AnchorPoint 当作 (0,0)，没有检查样式/环境导致的中心锚点偏移；截图中的按钮偏移与半宽/半高一致，是本轮处理的复现条件，并不宣称已确定所有执行器的默认值。现在测试对 GuiObject 属性使用 Lune 的 Roblox 反射实例验证，并显式注入中心锚点验证重置，同时计算实际锚点矩形，避免只检查 Position.Offset。已发布版本先前的 HTML 图片不作为真机验收结果。
 
-候选版仍需在出现问题的原设备/执行器验证：已校验隐藏 Key 表单，到期时间为北京时间且不换行，当前/通用分区三列与滚动正常，场景文本来自 scenario，背包不遮挡卡片；鼠标/手指拖动后仍可点击和滚动，关闭/恢复后后台监控不重启。本版继续读取现有 scenario 字段，缺字段时界面不会伪造场景。真机验收结果独立记录。
+候选版仍需在出现问题的原设备/执行器验证：已校验隐藏 Key 表单，剩余有效期正确，当前游戏图标与中英文不重叠，当前/通用分区三列与滚动正常，场景文本来自 scenario，背包不遮挡卡片；鼠标/手指拖动后仍可点击和滚动，关闭/恢复后后台监控不重启。本版继续读取现有 scenario 字段，缺字段时界面不会伪造场景。真机验收结果独立记录。

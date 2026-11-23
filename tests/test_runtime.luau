@@ -1,14 +1,18 @@
 local fs = require("@lune/fs")
 local luau = require("@lune/luau")
 local Runtime = luau.load(fs.readFile("src/runtime.lua"))()
-assert(Runtime.formatExpiry("2027-04-08T16:05:33.375Z")=="2027-04-09 00:05")
-assert(Runtime.formatExpiry("2026-12-31T23:59:00Z")=="2027-01-01 07:59")
-assert(Runtime.formatExpiry("2028-02-28T20:01:00Z")=="2028-02-29 04:01")
-assert(Runtime.formatExpiry("2027-02-28T20:01:00Z")=="2027-03-01 04:01")
-assert(Runtime.formatExpiry(nil)=="长期有效")
-for _,value in ipairs({"bad","2027-02-29T12:00:00Z","2027-01-01T25:00:00Z","2027-01-01T10:00:00+08:00",123})do
-    assert(Runtime.formatExpiry(value)=="时间待同步")
+for _,case in ipairs({{172800,"剩余 2 天"},{86400,"剩余 1 天"},{86399,"剩余 23 小时"},{3600,"剩余 1 小时"},{3599,"剩余 59 分钟"},{60,"剩余 1 分钟"},{59,"剩余不足 1 分钟"},{0,"已到期"},{-1,"已到期"}}) do
+    assert(Runtime.remaining(case[1])==case[2])
 end
+assert(Runtime.remaining(nil)=="长期有效")
+for _,value in ipairs({"bad",0/0,math.huge,-math.huge})do assert(Runtime.remaining(value)=="时间待同步")end
+local gameInfo={id="demo",nameZh="中文游戏",nameEn="English Game"}
+local demo={id="script",gameId="demo",universeIds={1},placeIds={2},game=gameInfo}
+assert(Runtime.currentGame({demo},1,2)==gameInfo)
+assert(Runtime.currentGame({demo},1,3)==gameInfo,"同游戏其他地图仍可识别游戏身份")
+assert(Runtime.currentGame({demo},9,3)==nil)
+assert(Runtime.currentGame({{id="common",gameId="demo",universal=true,game=gameInfo}},1,2)==nil)
+assert(Runtime.currentGame({{id="wrong",gameId="other",placeIds={2},game=gameInfo}},1,2)==nil)
 local context = Runtime.lifecycle()
 local events = {}
 local target = { value = 1 }
