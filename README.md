@@ -1,6 +1,6 @@
 # zp-hub
 
-独立的国内 Hub 客户端与公共资源构建仓库。界面、搜索、游戏排序、Key 会话客户端、Key 操作页、混淆与 GitHub 发布在此维护；不包含游戏脚本、会员数据库或授权后端，也不依赖相邻源码仓库。
+独立的 Hub 客户端与公共资源构建仓库。界面、搜索、游戏排序、Key 会话客户端、Key 操作页、混淆与 GitHub 发布在此维护；不包含游戏脚本、会员数据库或授权后端，也不依赖相邻源码仓库。
 
 ## 仓库边界
 
@@ -73,7 +73,7 @@ HUB_TEST_LOADER=/tmp/zp-hub-assets-obfuscated-1.1.0/loader.lua \
 
 ## 原脚本零修改与会话终止
 
-本节对应 `hub-v1.1.0` 的客户端策略；历史 `hub-v1.0.0` 保留旧行为，不覆盖旧 Release。主备入口须同步同一版本，并以实际 Release 和校验和为准。
+本节对应 `hub-v1.1.0` 的客户端策略；历史 `hub-v1.0.0` 保留旧行为，不覆盖旧 Release。国内、海外统一使用同一个 GitHub Release 加载入口，以实际 Release 和校验和为准。
 
 - API 返回什么正文，Hub 就编译执行什么正文，不注入代码、不改写环境、不向原脚本传入 `context` 或其他参数，也不把返回函数当作卸载契约。原有远端加载入口及其子脚本保持原语义。
 - `Runtime.lifecycle()` 按每轮视图管理 UI，授权控制器、令牌、租约、心跳及看门狗独立于视图存活。授权失效不再宣称已卸载任意游戏脚本，而是调用 `LocalPlayer:Kick()` 显示 Roblox 原生断开提示并结束当前服务器会话；不是关闭 Roblox 进程，也不是回滚服务器已发生的动作。
@@ -88,7 +88,7 @@ HUB_TEST_LOADER=/tmp/zp-hub-assets-obfuscated-1.1.0/loader.lua \
 
 原协议字段 `lifecycle=managed` 继续保留，含义为游戏范围、原始入口和 **Hub 会话终止策略** 已完成接入验收；不要求游戏源码配合清理。`pending` 仍不开放，66 条旧记录不批量自动启用。
 
-发布时使用新版本标签，保留历史 Release，并同步 GitHub 主加载器和国内备用公共资源；再给首批验收后的脚本开放 Hub。旧策略的 Hub 单例会提示重新进入游戏，不悄悄复用仍将 UI 销毁视为退出的策略；同策略的后台单例只恢复视图。旧公开版本和被篡改的客户端不因此变成可信执行环境；已下发正文也不支持远程回收。
+发布时使用新版本标签，保留历史 Release，GitHub 统一分发加载器；若更新 Key 页面或维护旧后端加载链接，另行同步公共资源；再给首批验收后的脚本开放 Hub。旧策略的 Hub 单例会提示重新进入游戏，不悄悄复用仍将 UI 销毁视为退出的策略；同策略的后台单例只恢复视图。旧公开版本和被篡改的客户端不因此变成可信执行环境；已下发正文也不支持远程回收。
 
 此策略依赖客户端调度与原生 Kick，非让出执行的死循环、执行器 Hook 和客户端篡改属于已知边界；测试使用本地 Kick 替身，不代表真实游戏已断开。如果执行器清理操作同时杀掉后台协程或重置运行环境，不属于仅删除 UI，监控也会受影响。真实执行器、原脚本及其第三方依赖、UI 清理/恢复、到期/顶号/断网原生提示仍须逐项验收。
 
@@ -96,7 +96,7 @@ HUB_TEST_LOADER=/tmp/zp-hub-assets-obfuscated-1.1.0/loader.lua \
 
 Hub 的目录和脚本内容直接来自后端原脚本大厅数据库，不读取游戏仓库，也没有脚本打包、上传发布目录的步骤。配置、上架或修改脚本通过原脚本大厅管理 API 完成。Hub 继续请求 `/api/hub/catalog` 和鉴权后的 `/api/hub/scripts/:id/load`，响应字段和授权协议保持原样。
 
-为保留国内加载器和 Key 页地址，将本仓库公共构建输出直接部署给后端：
+为保留 Key 页地址及旧后端加载链接兼容，将本仓库公共构建输出部署给后端；国内、海外用户均从 GitHub 加载 Hub，不依赖此目录选择加载入口：
 
 ```dotenv
 HUB_ENABLED=true
@@ -122,7 +122,7 @@ https://github.com/evennext333-ai/zp-hub/releases/latest/download/loader.lua
 2. 主入口供 `game:HttpGet` 匿名访问，发布仓库须公开。公开仓库也会公开明文源码及历史；混淆 Release 附件不隐藏源码。私有仓库的 Release 需要认证，不适合作为这个公开加载入口。发布前先确认源码公开策略。
 3. 不再使用跨仓库 PAT 或 `HUB_RELEASE_TOKEN`。构建任务保持 `contents: read`；只有发布任务使用内置 `GITHUB_TOKEN` 和 `contents: write`。发布任务限定在 `evennext333-ai/zp-hub`，其他仓库和 fork 只构建。[GitHub 内置令牌与权限说明](https://docs.github.com/en/actions/tutorials/authenticate-with-github_token)
 4. 检查 `VERSION`，在本仓库创建并推送匹配标签，例如版本 `1.1.0` 对应 `hub-v1.1.0`；也可手动指定已存在的匹配标签。工作流显式检出标签而非默认分支。
-5. 测试与混淆完成后，构建任务输出 `hub-server-assets`（四个公共资源和 hub.json，供国内备用入口与 Key 页部署）和 `hub-public`（`loader.lua`、`NOTICE.txt`、`SHA256SUMS`）。两份混淆加载器逐字节一致。
+5. 测试与混淆完成后，构建任务输出 `hub-server-assets`（四个公共资源和 hub.json，供 Key 页部署及旧后端加载链接兼容）和 `hub-public`（`loader.lua`、`NOTICE.txt`、`SHA256SUMS`）。两份混淆加载器逐字节一致。
 6. 发布任务校验附件白名单与 SHA256，在同一仓库要求标签已经存在，以实际构建提交为来源创建草稿，附件上传成功后才公开并标记为 latest。已存在的 Release 不覆盖，失败后检查草稿和产物，处理后再运行。[GitHub CLI 标签校验说明](https://cli.github.com/manual/gh_release_create)
 
 原 `r-s-zh` 的 Release 不再作为发布目标，不上传、不删除或覆盖那里的历史附件；旧 GitHub URL 也不自动重定向到新地址，应向用户分发新的加载语句。该仓库仅保留游戏源码职责。
@@ -136,13 +136,13 @@ loadstring(game:HttpGet("https://github.com/evennext333-ai/zp-hub/releases/lates
 
 运行流程：GitHub 下载并启动公共 Hub → 请求 `https://www.zldelf.cloud/api` 获取目录、校验 Key 和加载脚本。脚本正文继续复用现有大厅数据库，不从 GitHub 下载游戏源码。
 
-- 主入口：`https://github.com/evennext333-ai/zp-hub/releases/latest/download/loader.lua`，首次成功公开发布后使用。
+- 国内、海外唯一推荐加载入口：`https://github.com/evennext333-ai/zp-hub/releases/latest/download/loader.lua`。不按地区切换加载器域名。
 - API：`https://www.zldelf.cloud/api`，运行接口仍为 `/api/hub/*`。
 - Key 页面：`https://www.zldelf.cloud/api/hub/keys`。
-- 国内备用加载器：`https://www.zldelf.cloud/api/hub/loader.lua`，需独立部署公共构建目录。
+- 旧后端加载链接仅保留兼容，不再作为国内入口分发；现有 API 路由不删除。
 - 原 `/hub/loader.lua`、`/hub/keys` 等后端兼容入口继续保留，不改路由或鉴权协议。
 
-GitHub 首次发布不自动部署国内公共资源，国内资源切换也不自动创建 Release；两边需部署同一版本以避免主备客户端行为差异。国内 GitHub 可达性需实测，主地址失败时可显式改用上述国内备用加载器，但 API 地址不变。
+GitHub 发布不自动更新后端托管的 Key 页面及兼容资源，后端资源更新也不自动创建 Release。加载入口不做地区判断或自动回退；国内 GitHub 可达性需实测，访问失败时提示网络问题，不切换到 API 域名下载加载器。业务 API 地址仍保持不变。
 
 ## 当前发布门槛
 

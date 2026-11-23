@@ -1,6 +1,7 @@
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -95,7 +96,13 @@ class ReleaseConfigTests(unittest.TestCase):
             self.assertIn(publish.LOADER_URL, (ROOT / path).read_text())
         self.assertIn(publish.LOADER_URL, self.script)
         self.assertIn('API: https://www.zldelf.cloud/api', self.script)
-        self.assertIn('href="loader.lua"', (ROOT / 'src/keys.html').read_text())
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / 'public'
+            build.build(build.DEFAULT_API_URL, output)
+            for path in (ROOT / 'src/keys.html', output / 'keys.html'):
+                html = path.read_text()
+                self.assertEqual(re.findall(r'href="([^"\s]*loader\.lua)"', html), [publish.LOADER_URL])
+                self.assertNotIn('国内备用入口', html)
 
 
 if __name__ == '__main__':
