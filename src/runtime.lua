@@ -51,7 +51,7 @@ function Runtime.search(scripts, query, universeId, placeId)
     local result = {}
     query = string.lower(query or "")
     for _, script in ipairs(scripts) do
-        local words = { script.nameZh, script.nameEn, script.id, script.gameId, type(script.shortDescription) == "string" and script.shortDescription or "" }
+        local words = { script.nameZh, script.nameEn, script.id, script.gameId, type(script.scenario) == "string" and script.scenario or "" }
         for _, word in ipairs(script.aliases or {}) do table.insert(words, word) end
         for _, word in ipairs(script.tags or {}) do table.insert(words, word) end
         if string.find(string.lower(table.concat(words, " ")), query, 1, true) then
@@ -75,7 +75,7 @@ function Runtime.layout(availableWidth, availableHeight, count)
     local scale = math.min(1, availableWidth / width, availableHeight / height)
     count = math.max(0, tonumber(count) or 0)
     local compact = width < 900 or height < 580
-    local pad, gap, cardHeight = 20, 12, compact and 156 or 188
+    local pad, gap, cardHeight = 20, 12, compact and 144 or 156
     local left = compact and 220 or 256
     local mainWidth = width - left - pad
     local columns = 3
@@ -91,9 +91,10 @@ function Runtime.layout(availableWidth, availableHeight, count)
         gridHeight = compact and height - gridTop - 20 or footerY - gridTop - 14 }
 end
 
-function Runtime.description(script)
-    local value = type(script.shortDescription) == "string" and script.shortDescription:gsub("%s+", " "):match("^%s*(.-)%s*$") or ""
-    return value ~= "" and value or "作者暂未填写脚本简介"
+function Runtime.scenario(script)
+    if type(script.scenario) ~= "string" then return "场景信息待接口同步" end
+    local value = script.scenario:gsub("%s+", " "):match("^%s*(.-)%s*$")
+    return value ~= "" and value or "未设置场景"
 end
 
 function Runtime.deadline(sentAt, remaining)

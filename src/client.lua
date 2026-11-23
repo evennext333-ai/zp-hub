@@ -181,6 +181,14 @@ local function buildView(uiContext)
     assert(guiParent, "玩家界面尚未就绪，请重新加载入口恢复界面")
     local function object(className, properties, parent)
         local item = Instance.new(className)
+        if className == "TextButton" then item.Style = Enum.ButtonStyle.Custom end
+        if className == "Frame" or className == "ScrollingFrame" or className == "TextLabel" or className == "TextButton" or className == "TextBox" then
+            item.AnchorPoint = Vector2.new(0, 0)
+            item.AutomaticSize = Enum.AutomaticSize.None
+            item.SizeConstraint = Enum.SizeConstraint.RelativeXY
+            item.Rotation = 0
+            item.ZIndex = 2
+        end
         for key, value in pairs(properties) do item[key] = value end
         item.Parent = parent
         return item
@@ -208,6 +216,7 @@ local function buildView(uiContext)
         }, parent)
     end
     local function place(item, x, y, width, height)
+        item.AnchorPoint = Vector2.new(0, 0)
         item.Position = UDim2.fromOffset(x, y)
         item.Size = UDim2.fromOffset(width, height)
     end
@@ -215,7 +224,7 @@ local function buildView(uiContext)
         local item = rounded(object("TextButton", {
             Name = name, BackgroundColor3 = primary and colors.accent or colors.surface,
             TextColor3 = primary and colors.ink or colors.text, Font = Enum.Font.GothamMedium,
-            TextSize = 13, Text = value, Selectable = true, AutoButtonColor = true, BorderSizePixel = 0,
+            TextSize = 13, TextScaled = false, Text = value, Selectable = true, AutoButtonColor = true, BorderSizePixel = 0,
         }, parent), 9)
         if not primary then outline(item) end
         return item
@@ -231,20 +240,18 @@ local function buildView(uiContext)
         outline(field)
         return field
     end
-    local gui = object("ScreenGui", { Name = "RSZH_Hub", ResetOnSpawn = false, ZIndexBehavior = Enum.ZIndexBehavior.Sibling }, guiParent)
+    local gui = object("ScreenGui", { Name = "RSZH_Hub", ResetOnSpawn = false, DisplayOrder = 10000, ZIndexBehavior = Enum.ZIndexBehavior.Sibling }, guiParent)
     uiContext.onCleanup(function() gui:Destroy() end)
     local viewport = object("Frame", {
-        Name = "HubViewport", AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
-        Size = UDim2.new(0.94, 0, 0.9, 0), BackgroundTransparency = 1, BorderSizePixel = 0,
+        Name = "HubViewport", AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(0.5, 0, 0.5, -20),
+        Size = UDim2.new(0.94, 0, 0.9, -40), BackgroundTransparency = 1, BorderSizePixel = 0,
     }, gui)
     object("UISizeConstraint", { MaxSize = Vector2.new(1040, 720) }, viewport)
     -- The workspace stays horizontal; only the card grid scrolls.
-    local panel = rounded(object("ScrollingFrame", {
+    local panel = rounded(object("Frame", {
         Name = "HubWindow", AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
         Size = UDim2.fromOffset(700, 340), BackgroundColor3 = colors.canvas, BorderSizePixel = 0,
-        CanvasSize = UDim2.new(), ScrollBarThickness = 3, ScrollBarImageColor3 = colors.border,
-        ScrollingDirection = Enum.ScrollingDirection.Y, AutomaticCanvasSize = Enum.AutomaticSize.None,
-        ScrollingEnabled = false, ClipsDescendants = true, Visible = true,
+        ClipsDescendants = true, Visible = true,
     }, viewport), 16)
     outline(panel)
     local uiScale = object("UIScale", { Name = "WorkspaceScale", Scale = 1 }, panel)
@@ -252,7 +259,9 @@ local function buildView(uiContext)
         Font = Enum.Font.GothamBold, TextSize = 17, TextColor3 = colors.ink, BorderSizePixel = 0 }, panel), 10)
     local heading = text(panel, "Heading", "ZS HUB", 21)
     heading.Font = Enum.Font.GothamBold
-    local subtitle = text(panel, "Subtitle", "脚本库 / 为你的游戏找到合适的工具", 12, colors.muted)
+    local subtitle = text(panel, "Subtitle", "拖动标题栏移动窗口", 12, colors.muted)
+    local dragHandle = object("Frame", { Name = "DragHandle", BackgroundTransparency = 1,
+        Active = true, Selectable = false, BorderSizePixel = 0, ZIndex = 8 }, panel)
     local closeButton = button(panel, "CloseView", "关闭界面")
     local collapseButton = button(panel, "CollapseView", "收起")
     local sideTitle = text(panel, "SideTitle", "当前游戏", 12, colors.muted)
@@ -268,7 +277,7 @@ local function buildView(uiContext)
     libraryTitle.Font = Enum.Font.GothamBold
     local countLabel = text(panel, "ScriptCount", "正在同步目录", 12, colors.muted)
     countLabel.TextXAlignment = Enum.TextXAlignment.Right
-    local searchBox = input(panel, "ScriptSearch", "搜索脚本名称、简介或标签…")
+    local searchBox = input(panel, "ScriptSearch", "搜索脚本名称、场景或标签…")
     local allButton = button(panel, "AllScripts", "全部脚本")
     local currentButton = button(panel, "AvailableScripts", "当前可用")
     local list = object("ScrollingFrame", {
@@ -277,11 +286,12 @@ local function buildView(uiContext)
         ScrollingDirection = Enum.ScrollingDirection.Y, AutomaticCanvasSize = Enum.AutomaticSize.None,
         CanvasSize = UDim2.new(), ClipsDescendants = true,
     }, panel)
+    object("UIPadding", { PaddingLeft = UDim.new(0, 2), PaddingRight = UDim.new(0, 2), PaddingTop = UDim.new(0, 2), PaddingBottom = UDim.new(0, 2) }, list)
     local grid = object("UIGridLayout", { Name = "CardLayout", CellPadding = UDim2.fromOffset(12, 12),
         CellSize = UDim2.fromOffset(260, 188), FillDirection = Enum.FillDirection.Horizontal,
         HorizontalAlignment = Enum.HorizontalAlignment.Left, SortOrder = Enum.SortOrder.LayoutOrder }, list)
     -- Empty state is a sibling of the grid, never a grid item.
-    local emptyLabel = text(panel, "EmptyState", "没有匹配的脚本\n试试其他名称、简介或标签", 14, colors.muted)
+    local emptyLabel = text(panel, "EmptyState", "没有匹配的脚本\n试试其他名称、场景或标签", 14, colors.muted)
     emptyLabel.TextXAlignment = Enum.TextXAlignment.Center
     emptyLabel.Visible = false
     local footerNote = text(panel, "FooterNote", "原脚本独立加载 · 授权在后台持续校验", 12, colors.muted)
@@ -305,12 +315,39 @@ local function buildView(uiContext)
         end)
         uiContext.onCleanup(function() connection:Disconnect() end)
     end
+    local inputService = game:GetService("UserInputService")
+    local dragInput, dragStart, dragOrigin, dragOffset, currentLayout = nil, nil, nil, Vector2.new(0, 0), nil
+    local function moveWindow(offset)
+        local screen = gui.AbsoluteSize
+        if not currentLayout or screen.X <= 0 or screen.Y <= 0 then return end
+        local limitX = math.max(0, (screen.X - currentLayout.width * currentLayout.scale) / 2 - 8)
+        local limitY = math.max(0, (screen.Y - 40 - currentLayout.height * currentLayout.scale) / 2 - 8)
+        dragOffset = Vector2.new(math.clamp(offset.X, -limitX, limitX), math.clamp(offset.Y, -limitY, limitY))
+        viewport.Position = UDim2.new(0.5, dragOffset.X, 0.5, dragOffset.Y - 20)
+    end
+    connect(dragHandle.InputBegan, function(input)
+        if dragInput or (input.UserInputType ~= Enum.UserInputType.MouseButton1 and input.UserInputType ~= Enum.UserInputType.Touch) then return end
+        dragInput, dragStart, dragOrigin = input, Vector2.new(input.Position.X, input.Position.Y), dragOffset
+    end)
+    connect(inputService.InputChanged, function(input)
+        if not panel.Visible then dragInput = nil return end
+        if not dragInput then return end
+        local mouse = dragInput.UserInputType == Enum.UserInputType.MouseButton1 and input.UserInputType == Enum.UserInputType.MouseMovement
+        if not mouse and input ~= dragInput then return end
+        moveWindow(dragOrigin + Vector2.new(input.Position.X, input.Position.Y) - dragStart)
+    end)
+    connect(inputService.InputEnded, function(input)
+        if input == dragInput or (dragInput and dragInput.UserInputType == Enum.UserInputType.MouseButton1 and input.UserInputType == Enum.UserInputType.MouseButton1) then dragInput = nil end
+    end)
+    connect(inputService.WindowFocusReleased, function() dragInput = nil end)
     local function fit()
         local size = viewport.AbsoluteSize
         local layout = Runtime.layout(size.X, size.Y, #cards)
+        currentLayout = layout
         panel.Size = UDim2.fromOffset(layout.width, layout.height)
         uiScale.Scale = layout.scale
         local w, pad = layout.width, layout.pad
+        place(dragHandle, pad, 10, w - pad * 2 - 152, 56)
         place(brand, pad, 18, 38, 38)
         place(heading, pad + 50, 16, math.max(72, w - pad * 2 - 202), 26)
         place(subtitle, pad + 50, 46, math.max(72, w - pad * 2 - 202), 20)
@@ -344,12 +381,12 @@ local function buildView(uiContext)
         grid.FillDirectionMaxCells = layout.columns
         for _,card in ipairs(cards) do
             local parts = cardParts[card]
-            parts.title.Position = UDim2.fromOffset(14, layout.compact and 44 or 48)
-            parts.title.Size = UDim2.new(1, -28, 0, layout.compact and 32 or 40)
-            parts.description.Position = UDim2.fromOffset(14, layout.compact and 82 or 94)
-            parts.description.Size = UDim2.new(1, -28, 0, layout.compact and 34 or 42)
-            parts.action.Position = UDim2.fromOffset(14, layout.compact and 124 or 148)
-            parts.action.Size = UDim2.new(1, -28, 0, layout.compact and 24 or 26)
+            parts.title.Position = UDim2.fromOffset(14, layout.compact and 34 or 36)
+            parts.title.Size = UDim2.new(1, -28, 0, layout.compact and 32 or 36)
+            parts.scenario.Position = UDim2.fromOffset(14, layout.compact and 72 or 78)
+            parts.scenario.Size = UDim2.new(1, -28, 0, 30)
+            parts.action.Position = UDim2.fromOffset(14, layout.cardHeight - 34)
+            parts.action.Size = UDim2.new(1, -28, 0, 24)
         end
         list.CanvasSize = UDim2.fromOffset(0, layout.gridContentHeight)
         list.ScrollingEnabled = true
@@ -357,13 +394,14 @@ local function buildView(uiContext)
         place(footerNote, pad, layout.footerY + 4, w - pad * 2 - 124, 40)
         place(stopButton, layout.compact and pad or w - pad - 112, layout.footerY, layout.compact and 184 or 112, 44)
         footerNote.Visible = not layout.compact
+        moveWindow(dragOffset)
         allButton.BackgroundColor3 = onlyCurrent and colors.surface or colors.chip
         currentButton.BackgroundColor3 = onlyCurrent and colors.chip or colors.surface
         allButton.TextColor3 = onlyCurrent and colors.text or colors.accent
         currentButton.TextColor3 = onlyCurrent and colors.accent or colors.text
     end
     connect(viewport:GetPropertyChangedSignal("AbsoluteSize"), fit)
-    connect(collapseButton.Activated, function() panel.Visible = false toggle.Visible = true end)
+    connect(collapseButton.Activated, function() dragInput = nil panel.Visible = false toggle.Visible = true end)
     connect(toggle.Activated, function() panel.Visible = true toggle.Visible = false end)
     local function render()
         for _, card in ipairs(cards) do card:Destroy() end
@@ -380,23 +418,23 @@ local function buildView(uiContext)
                     Text = script.nameZh, TextTransparency = 1, Selectable = available, AutoButtonColor = available,
                     BackgroundColor3 = colors.surface, BorderSizePixel = 0,
                 }, list), 12)
-                outline(card, rank == 0 and colors.accent or colors.border)
-                rounded(object("TextLabel", { Name = "Category", Position = UDim2.fromOffset(14, 12), Size = UDim2.fromOffset(84, 24),
-                    BackgroundColor3 = rank == 0 and colors.chip or colors.input, BorderSizePixel = 0,
-                    Text = category, TextSize = 11, Font = Enum.Font.GothamMedium,
-                    TextColor3 = rank == 0 and colors.accent or colors.muted }, card), 6)
+                card.ClipsDescendants = true
+                outline(card)
+                if rank == 0 then
+                    object("Frame", { Name = "CurrentRail", Position = UDim2.fromOffset(0, 12), Size = UDim2.fromOffset(3, 20), BackgroundColor3 = colors.accent, BorderSizePixel = 0 }, card)
+                end
+                local categoryLabel = text(card, "Category", category, 11, rank == 0 and colors.accent or colors.muted)
+                categoryLabel.Position, categoryLabel.Size = UDim2.fromOffset(14, 12), UDim2.new(1, -28, 0, 16)
                 local title = text(card, "ScriptName", script.nameZh, 15, script.enabled and colors.text or colors.muted)
                 title.Font = Enum.Font.GothamMedium
-                title.Position, title.Size = UDim2.fromOffset(14, 48), UDim2.new(1, -28, 0, 40)
-                local description = text(card, "ShortDescription", Runtime.description(script), 12, colors.muted)
-                description.Position, description.Size = UDim2.fromOffset(14, 94), UDim2.new(1, -28, 0, 42)
-                local action = text(card, "CardAction", available and "加载脚本  →" or (script.enabled and "切换游戏后使用" or "待上架"), 12, available and colors.accent or colors.muted)
-                action.Position, action.Size = UDim2.fromOffset(14, 148), UDim2.new(1, -28, 0, 26)
+                local scenario = text(card, "Scenario", Runtime.scenario(script), 12, colors.muted)
+                local action = text(card, "CardAction", available and "加载  →" or (script.enabled and "切换游戏后使用" or "待上架"), 12, available and colors.accent or colors.muted)
                 action.TextYAlignment = Enum.TextYAlignment.Center
+                action.TextXAlignment = Enum.TextXAlignment.Right
                 card.Activated:Connect(function()
                     if uiContext.alive then task.spawn(run, script, keyBox.Text) end
                 end)
-                cardParts[card] = { title = title, description = description, action = action }
+                cardParts[card] = { title = title, scenario = scenario, action = action }
                 table.insert(cards, card)
             end
         end

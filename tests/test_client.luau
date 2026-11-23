@@ -32,21 +32,40 @@ local function fixture(options)
                 function c:Disconnect() self.Connected=false end
                 table.insert(listeners,{c,callback});return c
             end,
-            Fire=function()
-                for _, entry in ipairs(table.clone(listeners)) do if entry[1].Connected then entry[2]() end end
+            Fire=function(_, ...)
+                for _, entry in ipairs(table.clone(listeners)) do if entry[1].Connected then entry[2](...) end end
             end,
         }
     end
     local function create(class)
-        local item = {ClassName=class,AbsoluteSize=rb.Vector2.new(600,560),Activated=signal(),Destroying=signal(),signals={}}
-        function item:GetPropertyChangedSignal(name)
-            if not self.signals[name] then self.signals[name]=signal() end
-            return self.signals[name]
+        local native = rb.Instance.new(class)
+        local data = {ClassName=class,AbsoluteSize=rb.Vector2.new(600,560),Activated=signal(),InputBegan=signal(),Destroying=signal(),signals={},native=native}
+        if options.centeredButtons and class=="TextButton" then data.AnchorPoint=rb.Vector2.new(0.5,0.5) end
+        local item = setmetatable({}, {
+            __index=function(_,key)
+                if data[key]~=nil then return data[key] end
+                local ok,value=pcall(function()return native[key]end)
+                if ok then return value end
+                return nil
+            end,
+            __newindex=function(_,key,value)
+                if key=="Parent" then
+                    native.Parent=type(value)=="table" and value.native or nil
+                elseif key~="AbsoluteSize" and key~="destroyed" then
+                    local ok,err=pcall(function()native[key]=value end)
+                    assert(ok,"无效 Roblox 属性："..class.."."..key.." / "..tostring(err))
+                end
+                data[key]=value
+            end,
+        })
+        data.GetPropertyChangedSignal=function(_,name)
+            if not data.signals[name] then data.signals[name]=signal() end
+            return data.signals[name]
         end
-        function item:Destroy()
+        data.Destroy=function(self)
             if self.destroyed then return end
             self.destroyed=true;self.Destroying:Fire()
-            for _, child in ipairs(objects) do if child.Parent==self then child:Destroy() end end
+            for _,child in ipairs(objects)do if child.Parent==self then child:Destroy()end end
             self.Parent=nil
         end
         table.insert(objects,item);return item
@@ -84,7 +103,9 @@ local function fixture(options)
             if options.kickFails then error("fixture Kick failure") end
         end
     end
+    local userInput = {InputChanged=signal(),InputEnded=signal(),WindowFocusReleased=signal()}
     local services = {
+        UserInputService=userInput,
         Players={LocalPlayer=player},
         HttpService={JSONEncode=function(_,v)return serde.encode("json",v)end,JSONDecode=function(_,v)return serde.decode("json",v)end,
             GenerateGUID=function()generation+=1;return string.format("00000000-0000-4000-8000-%012d",generation)end},
@@ -96,7 +117,7 @@ local function fixture(options)
         Instance={new=create},UDim2=rb.UDim2,UDim=rb.UDim,Vector2=rb.Vector2,Color3=rb.Color3,Enum=rb.Enum,
         warn=function(message)table.insert(counter.warnings,message)end,
     }
-    local entry={id="hall-7",gameId="demo",nameZh="授权检查",nameEn="Check",enabled=true,universal=true,lifecycle="managed",placeIds={},universeIds={},tags={},aliases={},shortDescription="检查当前游戏的授权连接与运行状态。"}
+    local entry={id="hall-7",gameId="demo",nameZh="授权检查",nameEn="Check",enabled=true,universal=true,lifecycle="managed",placeIds={},universeIds={},tags={},aliases={},scenario="授权连接 / 状态检查",shortDescription="不应显示这段简介"}
     environment.request=function(args)
         if not args.Body then assert(args.Headers["Content-Type"]==nil,"空正文请求不声明 JSON") end
         local data, err, status
@@ -138,12 +159,13 @@ local function fixture(options)
         return fn
     end
     local client=luau.load(clientSource,{environment=environment})
-    local f={counter=counter,server=server,env=hubEnv,objects=objects,find=find,client=client}
+    local f={counter=counter,server=server,env=hubEnv,objects=objects,find=find,client=client,inputService=userInput}
     function f.byName(name)
         for _,item in ipairs(objects) do if item.Name==name and not item.destroyed then return item end end
         error("对象缺失："..name)
     end
     function f.resize(width,height)
+        f.byName("RSZH_Hub").AbsoluteSize=rb.Vector2.new(width/0.94,(height+40)/0.9)
         local viewport=f.byName("HubViewport")
         viewport.AbsoluteSize=rb.Vector2.new(width,height)
         viewport:GetPropertyChangedSignal("AbsoluteSize"):Fire()
@@ -190,9 +212,9 @@ if process.env.HUB_UI_PREVIEW_DIR then
     check("导出三端布局预览",function()
         local sample={}
         local names={"资源收集助手","地图快捷导航","角色状态面板","画面与性能设置","采集路径标记","通用界面工具"}
-        local descriptions={"将常用采集操作集中到一个入口，减少重复操作。","整理地图位置与传送入口，快速找到下一处目标。","集中查看角色状态与当前任务，重要信息一眼可见。","按需调整画面表现，减少游玩时的视觉干扰。","标记常用路线与兴趣点，让探索更有方向。","跨游戏使用的轻量工具，保持简洁一致的操作。"}
-        for index,name in ipairs(names) do table.insert(sample,{id="hall-"..index,gameId="preview",nameZh=name,nameEn="Preview "..index,shortDescription=descriptions[index],enabled=true,universal=index>3,placeIds=index<=3 and {2} or {},universeIds={},aliases={},tags={}}) end
-        local cases={{"pc",1440,900,1040,720},{"tablet",1024,768,962,691},{"phone",844,390,793,351},{"landscape",667,375,627,337}}
+        local descriptions={"资源采集 / 日常任务","地图探索 / 快捷导航","角色状态 / 任务追踪","画面调整 / 性能优化","路线标记 / 兴趣点","通用工具 / 界面管理"}
+        for index,name in ipairs(names) do table.insert(sample,{id="hall-"..index,gameId="preview",nameZh=name,nameEn="Preview "..index,scenario=descriptions[index],shortDescription="不应显示简介",enabled=true,universal=index>3,placeIds=index<=3 and {2} or {},universeIds={},aliases={},tags={}}) end
+        local cases={{"pc",1440,900,1040,720},{"tablet",1024,768,962,691},{"phone",844,390,793,311},{"landscape",667,375,627,297}}
         local output=process.env.HUB_UI_PREVIEW_DIR
         fs.writeDir(output)
         for _,screen in ipairs(cases) do
@@ -218,6 +240,16 @@ if process.env.HUB_UI_PREVIEW_DIR then
     end)
 end
 
+check("按钮中心锚点的偏移回归",function()
+    local f=fixture({centeredButtons=true})
+    for _,size in ipairs({{700,340},{793,351},{1040,720}})do
+        f.resize(size[1],size[2])
+        for _,name in ipairs({"ValidateKey","CloseView","CollapseView","EndSession","AllScripts","AvailableScripts"})do
+            local item=f.byName(name)
+            assert(item.AnchorPoint==rb.Vector2.new(0,0),"位置按左上角计算，必须显式重置锚点："..name)
+        end
+    end
+end)
 check("原样执行、搜索布局、关闭与单实例恢复",function()
     local f=fixture();local panel,search
     for _,o in ipairs(f.objects)do
@@ -265,8 +297,53 @@ check("PC、平板、手机及横屏布局与触控区域",function()
         local bottom=footer.Position.Y.Offset+footer.Size.Y.Offset
         assert(bottom<=layout.height)
     end
-    assert(f.byName("ShortDescription").Text=="检查当前游戏的授权连接与运行状态。")
-    assert(f.byName("ShortDescription").RichText==false)
+    assert(f.byName("Scenario").Text=="授权连接 / 状态检查")
+    assert(f.byName("Scenario").RichText==false)
+end)
+check("真实属性与缩放锚点几何检查",function()
+    local f=fixture({centeredButtons=true})
+    for _,size in ipairs({{700,340},{793,351},{1040,720}})do
+        f.resize(size[1],size[2])
+        local function rect(name)
+            local o=f.byName(name)
+            local x=o.Position.X.Offset-o.AnchorPoint.X*o.Size.X.Offset
+            local y=o.Position.Y.Offset-o.AnchorPoint.Y*o.Size.Y.Offset
+            return {x=x,y=y,w=o.Size.X.Offset,h=o.Size.Y.Offset}
+        end
+        local function apart(a,b)return a.x+a.w<=b.x or b.x+b.w<=a.x or a.y+a.h<=b.y or b.y+b.h<=a.y end
+        assert(apart(rect("CollapseView"),rect("CloseView")),"收起和关闭不重叠")
+        assert(apart(rect("ScriptSearch"),rect("AllScripts")) and apart(rect("AllScripts"),rect("AvailableScripts")),"搜索与筛选不重叠")
+        assert(apart(rect("KeyInput"),rect("ValidateKey")),"Key 输入与按钮不重叠")
+        assert(f.byName("ValidateKey").Style==rb.Enum.ButtonStyle.Custom)
+        assert(f.byName("HubWindow").ClassName=="Frame")
+        assert(f.byName("RSZH_Hub").DisplayOrder==10000,"Hub 高于普通游戏背包界面")
+        assert(f.byName("DragHandle").Position.X.Offset+f.byName("DragHandle").Size.X.Offset<=rect("CollapseView").x,"拖动区域不覆盖操作按钮")
+    end
+    assert(not pcall(f.byName,"ShortDescription"),"卡片不再创建简介控件")
+end)
+check("鼠标拖动、触控独占与窗口边界",function()
+    local f=fixture();f.resize(1040,720)
+    f.byName("RSZH_Hub").AbsoluteSize=rb.Vector2.new(1440,900)
+    local handle=f.byName("DragHandle")
+    local mouse={UserInputType=rb.Enum.UserInputType.MouseButton1,Position=rb.Vector3.new(100,100,0)}
+    handle.InputBegan:Fire(mouse)
+    f.inputService.InputChanged:Fire({UserInputType=rb.Enum.UserInputType.MouseMovement,Position=rb.Vector3.new(160,130,0)})
+    local host=f.byName("HubViewport")
+    assert(host.Position.X.Offset==60 and host.Position.Y.Offset==10)
+    f.inputService.InputEnded:Fire(mouse)
+    f.inputService.InputChanged:Fire({UserInputType=rb.Enum.UserInputType.MouseMovement,Position=rb.Vector3.new(200,200,0)})
+    assert(host.Position.X.Offset==60)
+    local touch={UserInputType=rb.Enum.UserInputType.Touch,Position=rb.Vector3.new(100,100,0)}
+    handle.InputBegan:Fire(touch)
+    f.inputService.InputChanged:Fire({UserInputType=rb.Enum.UserInputType.Touch,Position=rb.Vector3.new(500,500,0)})
+    assert(host.Position.X.Offset==60,"其他手指不接管拖动")
+    touch.Position=rb.Vector3.new(5000,5000,0);f.inputService.InputChanged:Fire(touch)
+    assert(host.Position.X.Offset==192 and host.Position.Y.Offset==42,"不移出屏幕")
+    f.inputService.WindowFocusReleased:Fire()
+    touch.Position=rb.Vector3.new(0,0,0);f.inputService.InputChanged:Fire(touch)
+    assert(host.Position.X.Offset==192)
+    f.close();f.inputService.InputChanged:Fire(touch)
+    assert(f.counter.logins==0 and #f.counter.kicks==0,"拖动和关闭 UI 不影响授权")
 end)
 check("ZS 品牌与 f0644b 主题色保持一致",function()
     local f=fixture()
@@ -278,10 +355,10 @@ check("ZS 品牌与 f0644b 主题色保持一致",function()
     assert(f.byName("AllScripts").TextColor3==accent)
     f.click("当前可用");assert(f.byName("AvailableScripts").TextColor3==accent)
 end)
-check("名称、简介搜索与当前可用筛选不触发登录或脚本加载",function()
+check("名称、场景搜索与当前可用筛选不触发登录或脚本加载",function()
     local scripts={
-        {id="hall-8",gameId="other",nameZh="其他游戏工具",nameEn="Other",enabled=true,universal=false,placeIds={},universeIds={99},shortDescription="仅其他游戏适用",tags={},aliases={}},
-        {id="hall-7",gameId="demo",nameZh="当前游戏工具",nameEn="Current",enabled=true,universal=false,placeIds={2},universeIds={1},shortDescription="收集物品与快捷导航",tags={},aliases={}},
+        {id="hall-8",gameId="other",nameZh="其他游戏工具",nameEn="Other",enabled=true,universal=false,placeIds={},universeIds={99},scenario="仅其他游戏适用",tags={},aliases={}},
+        {id="hall-7",gameId="demo",nameZh="当前游戏工具",nameEn="Current",enabled=true,universal=false,placeIds={2},universeIds={1},scenario="收集物品与快捷导航",tags={},aliases={}},
         {id="hall-9",gameId="common",nameZh="通用工具",nameEn="Common",enabled=true,universal=true,placeIds={},universeIds={},tags={},aliases={}},
     }
     local f=fixture({catalog=scripts})
@@ -298,13 +375,13 @@ check("名称、简介搜索与当前可用筛选不触发登录或脚本加载"
     assert(f.byName("ScriptCard_hall-7"))
     assert(f.counter.logins==0 and f.counter.loads==0 and #f.counter.kicks==0)
 end)
-check("空目录、旧 API 缺少简介与长文本均有稳定布局",function()
+check("空目录、旧 API 缺少场景与长文本均有稳定布局",function()
     local f=fixture({catalog={}})
     assert(f.byName("EmptyState").Visible and f.byName("EmptyState").Parent~=f.byName("ScriptGrid"))
     assert(f.byName("ScriptCount").Text=="0 个脚本")
     local long=fixture({catalog={{id="hall-7",gameId="demo",nameZh=string.rep("很长的中文标题",15),nameEn="Long",enabled=true,universal=true,placeIds={},universeIds={},tags={},aliases={}}}})
     long.resize(627,337)
-    assert(long.byName("ShortDescription").Text=="作者暂未填写脚本简介")
+    assert(long.byName("Scenario").Text=="场景信息待接口同步")
     assert(long.byName("ScriptName").TextWrapped and long.byName("ScriptName").TextTruncate==rb.Enum.TextTruncate.AtEnd)
 end)
 check("原生断开先于尽力注销请求",function()
