@@ -22,7 +22,8 @@ local function fixture(options)
         delayHeartbeat=options.delayHeartbeat or 0, loginError=options.loginError,
         loadError=options.loadError, heartbeatError=options.heartbeatError,
         networkHeartbeat=options.networkHeartbeat, invalidHeartbeat=options.invalidHeartbeat, loginNetworkOnce=options.loginNetworkOnce}
-    local hubEnv = {HUB_KEY="RSH_" .. string.rep("a",43)}
+    local hubEnv = {}
+    if not options.noKey then hubEnv.HUB_KEY=options.externalKey~=nil and options.externalKey or "RSH_" .. string.rep("a",43) end
     if options.legacyHub then hubEnv.__RSZH_HUB={alive=true,focus=function()error("旧实例不应复用")end} end
     local function signal()
         local listeners = {}
@@ -58,6 +59,7 @@ local function fixture(options)
                 data[key]=value
             end,
         })
+        data.CaptureFocus=function()counter.focusedKeyInput=true end
         data.GetPropertyChangedSignal=function(_,name)
             if not data.signals[name] then data.signals[name]=signal() end
             return data.signals[name]
@@ -139,6 +141,8 @@ local function fixture(options)
             data={id=entry.id,version="hall-7-r1",source=server.source}
         elseif args.Method=="DELETE" then counter.deletes+=1;counter.logoutSawKicks=#counter.kicks;data=serde.null
         else
+            local body=serde.decode("json",args.Body)
+            assert(body.key==(options.expectedKey or "RSH_"..string.rep("a",43)),"仅发送夹具指定 Key")
             counter.logins+=1;task.wait(server.delayLogin);err=server.loginError
             if server.loginNetworkOnce and counter.logins==1 then err="NETWORK_ERROR";status=503 end
             data={token="HS1.fixture",sessionId="fixture",remainingLeaseSeconds=server.lease,kind="GAME"}
@@ -194,6 +198,10 @@ local function fixture(options)
         return f
     end
     client();f.owner=hubEnv.__RSZH_HUB;assert(hubEnv.HUB_KEY==nil,"外部 Key 使用后清理")
+    -- 默认夹具等待无延迟的自动登录；延迟用例保留真实竞态。
+    if not options.noKey and server.delayLogin==0 and not options.destroyDuringCatalog then
+        untilTrue(function()return f.byName("SessionStatus").Text~="正在校验授权…"end)
+    end
     return f
 end
 local function check(name,callback)
@@ -218,7 +226,7 @@ if process.env.HUB_UI_PREVIEW_DIR then
         local output=process.env.HUB_UI_PREVIEW_DIR
         fs.writeDir(output)
         for _,screen in ipairs(cases) do
-            local f=fixture({catalog=sample});f.resize(screen[4],screen[5])
+            local f=fixture({catalog=sample,noKey=true});f.resize(screen[4],screen[5])
             local nodes,ids={},{}
             for index,o in ipairs(f.objects) do ids[o]=index end
             local function dim(value)return value and {value.X.Scale,value.X.Offset,value.Y.Scale,value.Y.Offset} or nil end
@@ -240,6 +248,80 @@ if process.env.HUB_UI_PREVIEW_DIR then
     end)
 end
 
+check("外部 Key 自动校验且不自动启动脚本",function()
+    local f=fixture()
+    untilTrue(function()return f.counter.logins==1 and f.byName("SessionStatus").Text:find("授权有效",1,true)end)
+    assert(f.counter.loads==0 and f.counter.starts==0 and f.env.HUB_KEY==nil)
+    assert(f.byName("KeyInput").Text=="","完整 Key 不回填到界面")
+    assert(f.byName("KeyInput").PlaceholderText=="已登录；Key 已清理")
+    f.play();untilTrue(function()return f.counter.starts==1 end)
+end)
+check("未登录卡片弹窗不隐式提交输入的 Key",function()
+    local f=fixture({noKey=true})
+    f.play()
+    assert(f.byName("AuthPromptOverlay").Visible and f.byName("AuthPromptTitle").Text=="请先校验 Key")
+    assert(f.counter.logins==0 and f.counter.loads==0 and #f.counter.kicks==0)
+    assert(f.byName("AuthPromptOverlay").Modal and f.byName("AuthPromptOverlay").ZIndex>f.byName("DragHandle").ZIndex)
+    for _,size in ipairs({{627,297},{1040,720}})do
+        f.resize(size[1],size[2])
+        local prompt,window=f.byName("AuthPrompt"),f.byName("HubWindow")
+        assert(prompt.Size.X.Offset<=window.Size.X.Offset and prompt.Size.Y.Offset<=window.Size.Y.Offset)
+        assert(f.byName("AuthPromptValidate").Size.Y.Offset>=44 and f.byName("AuthPromptLater").Size.Y.Offset>=44)
+    end
+    f.byName("AuthPromptLater").Activated:Fire();assert(not f.byName("AuthPromptOverlay").Visible)
+    f.byName("KeyInput").Text="RSH_"..string.rep("a",43);f.play()
+    assert(f.counter.logins==0 and f.counter.loads==0,"输入了 Key 仍需明确校验")
+    f.byName("AuthPromptValidate").Activated:Fire()
+    assert(not f.byName("AuthPromptOverlay").Visible and f.counter.focusedKeyInput)
+    f.click("校验 Key");untilTrue(function()return f.byName("SessionStatus").Text:find("授权有效",1,true)end)
+    f.play();untilTrue(function()return f.counter.starts==1 end)
+end)
+check("无 Key 打开后重跑带 Key 入口会提交到现有控制器",function()
+    local key="RSH_"..string.rep("b",43)
+    local f=fixture({noKey=true,expectedKey=key})
+    f.close();f.env.HUB_KEY="  "..key.."  ";f.client()
+    untilTrue(function()return f.byName("SessionStatus").Text:find("授权有效",1,true)end)
+    assert(f.env.__RSZH_HUB==f.owner and f.env.HUB_KEY==nil)
+    assert(f.counter.logins==1 and f.counter.catalogs==1 and f.counter.loads==0)
+    f.env.HUB_KEY=key;f.client();task.wait(0.03)
+    assert(f.counter.logins==1,"有效会话不因重跑入口重复登录")
+end)
+check("自动校验期间点击卡片只提示等待，成功后关闭提示",function()
+    local f=fixture({delayLogin=0.2})
+    f.play();assert(f.byName("AuthPromptOverlay").Visible)
+    assert(f.byName("AuthPromptTitle").Text=="正在校验 Key")
+    f.env.HUB_KEY="RSH_"..string.rep("a",43);f.client()
+    untilTrue(function()return f.byName("SessionStatus").Text:find("授权有效",1,true)end)
+    assert(not f.byName("AuthPromptOverlay").Visible and f.counter.logins==1 and f.counter.loads==0)
+end)
+check("外部 Key 校验失败后可手动重试，不因失败误踢",function()
+    local f=fixture({loginError="HUB_KEY_INVALID"})
+    assert(f.byName("SessionStatus").Text:find("Key 无效",1,true) and #f.counter.kicks==0)
+    f.play();assert(f.byName("AuthPromptOverlay").Visible and f.counter.loads==0)
+    f.byName("AuthPromptValidate").Activated:Fire()
+    f.server.loginError=nil;f.byName("KeyInput").Text="RSH_"..string.rep("a",43)
+    f.click("校验 Key");untilTrue(function()return f.byName("SessionStatus").Text:find("授权有效",1,true)end)
+    assert(f.counter.logins==2 and f.counter.loads==0 and f.env.HUB_KEY==nil)
+end)
+check("空白和非字符串外部 Key 不自动登录",function()
+    for _,key in ipairs({"  ",123})do
+        local f=fixture({externalKey=key});f.play()
+        assert(f.counter.logins==0 and f.counter.loads==0 and f.env.HUB_KEY==nil)
+        assert(f.byName("AuthPromptOverlay").Visible)
+    end
+end)
+check("等待弹窗在登录失败后关闭并展示真实失败状态",function()
+    local f=fixture({delayLogin=0.2,loginError="HUB_KEY_INVALID"})
+    f.play();assert(f.byName("AuthPromptOverlay").Visible)
+    untilTrue(function()return f.byName("SessionStatus").Text:find("Key 无效",1,true)end)
+    assert(not f.byName("AuthPromptOverlay").Visible and #f.counter.kicks==0 and f.counter.loads==0)
+end)
+check("旧版本单例不静默丢弃重新传入的 Key",function()
+    local f=fixture({noKey=true});f.owner.submitKey=nil
+    f.env.HUB_KEY="RSH_"..string.rep("a",43);f.client()
+    assert(f.counter.logins==0 and #f.counter.warnings==1)
+    assert(f.counter.warnings[1]:find("重新进入游戏",1,true) and f.env.HUB_KEY==nil)
+end)
 check("按钮中心锚点的偏移回归",function()
     local f=fixture({centeredButtons=true})
     for _,size in ipairs({{700,340},{793,351},{1040,720}})do
@@ -322,7 +404,7 @@ check("真实属性与缩放锚点几何检查",function()
     assert(not pcall(f.byName,"ShortDescription"),"卡片不再创建简介控件")
 end)
 check("鼠标拖动、触控独占与窗口边界",function()
-    local f=fixture();f.resize(1040,720)
+    local f=fixture({noKey=true});f.resize(1040,720)
     f.byName("RSZH_Hub").AbsoluteSize=rb.Vector2.new(1440,900)
     local handle=f.byName("DragHandle")
     local mouse={UserInputType=rb.Enum.UserInputType.MouseButton1,Position=rb.Vector3.new(100,100,0)}
@@ -361,7 +443,7 @@ check("名称、场景搜索与当前可用筛选不触发登录或脚本加载"
         {id="hall-7",gameId="demo",nameZh="当前游戏工具",nameEn="Current",enabled=true,universal=false,placeIds={2},universeIds={1},scenario="收集物品与快捷导航",tags={},aliases={}},
         {id="hall-9",gameId="common",nameZh="通用工具",nameEn="Common",enabled=true,universal=true,placeIds={},universeIds={},tags={},aliases={}},
     }
-    local f=fixture({catalog=scripts})
+    local f=fixture({catalog=scripts,noKey=true})
     assert(f.byName("ScriptCard_hall-7").LayoutOrder==1)
     assert(f.byName("ScriptCard_hall-9").LayoutOrder==2)
     assert(f.byName("ScriptCard_hall-8").LayoutOrder==3)

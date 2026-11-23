@@ -43,7 +43,7 @@ Key 页请求头回归测试在本地与 CI 直接运行；真实 API 的 DOM �
 
 ```sh
 python3 /Users/lvjunling/work_space/flutter/persor/zp-hub/build.py \
-  --output /tmp/zp-hub-assets-1.2.1
+  --output /tmp/zp-hub-assets-1.2.2
 ```
 
 默认 API 是 `https://www.zldelf.cloud/api`，也可显式传 `--api-url`；根地址与 `/api` 前缀都支持，不生成重复 `/api/api`。
@@ -56,8 +56,8 @@ python3 /Users/lvjunling/work_space/flutter/persor/zp-hub/build.py \
 python3 /Users/lvjunling/work_space/flutter/persor/zp-hub/build.py \
   --prometheus-dir /tmp/prometheus \
   --lua-bin lua5.1 \
-  --output /tmp/zp-hub-assets-obfuscated-1.2.1
-HUB_TEST_LOADER=/tmp/zp-hub-assets-obfuscated-1.2.1/loader.lua \
+  --output /tmp/zp-hub-assets-obfuscated-1.2.2
+HUB_TEST_LOADER=/tmp/zp-hub-assets-obfuscated-1.2.2/loader.lua \
   lune run /Users/lvjunling/work_space/flutter/persor/zp-hub/tests/test_client.luau
 ```
 
@@ -71,6 +71,19 @@ HUB_TEST_LOADER=/tmp/zp-hub-assets-obfuscated-1.2.1/loader.lua \
 
 本仓库 Key 网页保留为会员自助与旧链接兼容入口，会员领取/重置仍使用用户端登录态；管理员 JWT 不代替会员授权。网页权益改为可读卡片，服务端文本只作为文本节点渲染；明文 Key 仍仅在生成时显示，不写本地存储。管理后台页面详见 `/Users/lvjunling/work_space/flutter/persor/zldelf-admin/docs/hub-keys.md`。
 
+## Key 校验与卡片点击
+
+```lua
+getgenv().HUB_KEY = "KEY"
+loadstring(game:HttpGet("https://github.com/evennext333-ai/zp-hub/releases/latest/download/loader.lua"))()
+```
+
+- `hub-v1.2.2` 起，首次加载会自动校验外部 `HUB_KEY`，但不自动启动任何脚本；看到「授权有效」后点击卡片加载。Key 读取后立即从外部环境清理，界面不回填完整 Key，日志不输出 Key。
+- 未登录时点击卡片，弹出「请先校验 Key」，提供「去校验 Key」与「稍后」；输入了 Key 但未点击校验也不隐式发起登录或下载。校验中点击提示等待，校验完成后关闭提示；失败仍显示实际错误，不误踢本局。
+- 同一局先无 Key 打开，再带 Key 重跑入口：将 Key 交给现有控制器校验，不重建心跳、目录或会话。已有有效会话时不重复登录或切换 Key；登录进行中也不重复发送。
+- 无 Key 重跑入口仍只恢复界面；已运行的旧版控制器没有新 Key 接收接口时，提示重新进入游戏加载新版。升级验收请先重新进入游戏，避免继续复用旧实例。
+- 验收：无 Key 点击弹窗 → 手动输入并校验 → 点击运行；新游戏直接带 Key 自动校验 → 点击运行；无 Key 打开后带 Key 重跑 → 单次登录。包含错误 Key、校验期间关闭/恢复、未登录卡片不下载及混淆产物的回归检查。测试仅使用虚构 Key，不读取线上真实凭据。
+
 ## 原脚本零修改与会话终止
 
 本节对应 `hub-v1.1.0` 的客户端策略；历史 `hub-v1.0.0` 保留旧行为，不覆盖旧 Release。国内、海外统一使用同一个 GitHub Release 加载入口，以实际 Release 和校验和为准。
@@ -81,7 +94,7 @@ HUB_TEST_LOADER=/tmp/zp-hub-assets-obfuscated-1.2.1/loader.lua \
 - 心跳仍约 30 秒、网络失败重试间隔 3 秒、租约最长 90 秒且不超过权益到期。服务器先使旧会话失效，旧客户端在下一次检查时发现；没有新增实时推送。
 - 一个游戏会话最多启动一份游戏脚本，避免原脚本无卸载契约时叠加或假装完成切换；重载或切换应先结束本局再重新进入。编译失败且尚未执行时可重试。开始执行后异常只记录状态，继续授权监控，不自动断开；重试前由用户手动结束本局，避免叠加可能残留的任务。
 - 「关闭界面」、执行器清理 UI 或游戏销毁 Hub 窗口，只释放该轮视图及监听，不注销会话、不结束游戏、不清除控制器单例；收起也继续后台校验。仅明确授权失效（含会员到期/吊销/重置）、顶号或原租约耗尽会自动结束本局。
-- 重新执行同一个 Hub 加载入口，复用现有控制器与已获取目录：界面仍在时展开，已销毁时重新获取 PlayerGui 并重建视图；不重复登录、启动脚本或创建监控循环。恢复显示最近的会话/运行状态，未提交的输入及搜索在重建时重置。界面重建失败只告警，不影响后台校验；同时恢复的请求只构建一份视图。
+- 重新执行同一个 Hub 加载入口，复用现有控制器与已获取目录：界面仍在时展开，已销毁时重新获取 PlayerGui 并重建视图；没有新增 Key 时不重复登录、启动脚本或创建监控循环；新版在尚未登录且本次提供新 Key 时自动校验。恢复显示最近的会话/运行状态，未提交的输入及搜索在重建时重置。界面重建失败只告警，不影响后台校验；同时恢复的请求只构建一份视图。
 - 「结束本局」仍是明确的手动断开操作。关闭界面后需手动结束时，重新执行原入口恢复界面，再点击此按钮；结束后清理会话并尽力注销。
 - 界面关闭不取消已请求的登录、下载或编译，可在后台完成。只有控制器已因授权失效/租约耗尽或手动结束而终止时，晚到的正文和新视图才不再启用，收到的晚到登录凭证会尽力注销。一次终止只发起一次 Kick，晚到的心跳不恢复终止状态。
 - Kick 报错时停用当前 Hub 加载和续租，并显示/输出立即手动离开本局的提示，不伪报游戏已断开；缺少 Kick 能力时不启动 Hub。
@@ -101,7 +114,7 @@ Hub 的目录和脚本内容直接来自后端原脚本大厅数据库，不读�
 ```dotenv
 HUB_ENABLED=true
 HUB_SECRET=<保留现有至少32字节的密钥>
-HUB_PUBLIC_DIR=/srv/zp-hub/public/1.2.1
+HUB_PUBLIC_DIR=/srv/zp-hub/public/1.2.2
 ```
 
 `HUB_PUBLIC_DIR` 只包含本仓库四个公共资源和 `hub.json`；没有游戏脚本或游戏目录清单。后端校验公共文件大小、路径和摘要后托管。只更新公共客户端时切换此目录并重启或滚动发布；修改脚本大厅内容与状态无需重启或重新构建 Hub。
@@ -121,7 +134,7 @@ https://github.com/evennext333-ai/zp-hub/releases/latest/download/loader.lua
 1. 远端使用 `git@github.com:evennext333-ai/zp-hub.git`，主分支为 `main`。推送已审查的源码和工作流后，再推送版本标签触发发布；仅推送 `main` 不会创建 Release，文档地址不是已上线的证明。
 2. 主入口供 `game:HttpGet` 匿名访问，发布仓库须公开。公开仓库也会公开明文源码及历史；混淆 Release 附件不隐藏源码。私有仓库的 Release 需要认证，不适合作为这个公开加载入口。发布前先确认源码公开策略。
 3. 不再使用跨仓库 PAT 或 `HUB_RELEASE_TOKEN`。构建任务保持 `contents: read`；只有发布任务使用内置 `GITHUB_TOKEN` 和 `contents: write`。发布任务限定在 `evennext333-ai/zp-hub`，其他仓库和 fork 只构建。[GitHub 内置令牌与权限说明](https://docs.github.com/en/actions/tutorials/authenticate-with-github_token)
-4. 检查 `VERSION`，在本仓库创建并推送匹配标签，例如版本 `1.2.1` 对应 `hub-v1.2.1`；也可手动指定已存在的匹配标签。工作流显式检出标签而非默认分支。
+4. 检查 `VERSION`，在本仓库创建并推送匹配标签，例如版本 `1.2.2` 对应 `hub-v1.2.2`；也可手动指定已存在的匹配标签。工作流显式检出标签而非默认分支。
 5. 测试与混淆完成后，构建任务输出 `hub-server-assets`（四个公共资源和 hub.json，供 Key 页部署及旧后端加载链接兼容）和 `hub-public`（`loader.lua`、`NOTICE.txt`、`SHA256SUMS`）。两份混淆加载器逐字节一致。
 6. 发布任务校验附件白名单与 SHA256，在同一仓库要求标签已经存在，以实际构建提交为来源创建草稿，附件上传成功后才公开并标记为 latest。已存在的 Release 不覆盖，失败后检查草稿和产物，处理后再运行。[GitHub CLI 标签校验说明](https://cli.github.com/manual/gh_release_create)
 
@@ -172,7 +185,7 @@ Hub 不再携带默认游戏清单或验证脚本包。普通大厅脚本默认�
 HUB_UI_PREVIEW_DIR=/tmp/zp-hub-ui-scenes lune run tests/test_client.luau
 ```
 
-当前构建版本为 `1.2.1`。本地构建不自动推送、部署或创建 GitHub Release；正式发布时后端短描述字段与新版公共客户端可分别灰度，原入口保持不变。已运行旧 UI 的游戏实例继续使用旧视图，重新进入游戏后再加载新版；不为界面升级打断现有授权会话。
+当前构建版本为 `1.2.2`。本地构建不自动推送、部署或创建 GitHub Release；正式发布时后端短描述字段与新版公共客户端可分别灰度，原入口保持不变。已运行旧 UI 的游戏实例继续使用旧视图，重新进入游戏后再加载新版；不为界面升级打断现有授权会话。
 
 
 ### 真实界面显示回归

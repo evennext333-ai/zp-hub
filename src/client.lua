@@ -1,11 +1,16 @@
 -- API 与 Runtime 由离线构建注入；首版只有一个国内 API。
 local env = (type(getgenv) == "function" and getgenv()) or _G
-local pendingKey = type(env.HUB_KEY) == "string" and env.HUB_KEY or ""
+local pendingKey = type(env.HUB_KEY) == "string" and env.HUB_KEY:match("^%s*(.-)%s*$") or ""
 env.HUB_KEY = nil
 local existing = env.__RSZH_HUB
 if type(existing) == "table" and existing.alive then
     assert(existing.policy == "background-v1", "Hub 会话策略已更新，请先重新进入游戏再加载")
     existing.focus()
+    if pendingKey ~= "" then
+        if type(existing.submitKey) == "function" then existing.submitKey(pendingKey)
+        else warn("[ZS Hub] 当前实例为旧版，请重新进入游戏后加载新版并自动校验 Key") end
+    end
+    pendingKey = ""
     return
 end
 local Http = game:GetService("HttpService")
@@ -114,6 +119,7 @@ login = function(inputKey)
     end
     body.key, key = nil, nil
     loginBusy = false
+    if view then view.dismissAuthPrompt() end
     if not owner.alive then
         if data and type(data.token) == "string" then logout(data.token) end
         return false
@@ -129,13 +135,16 @@ login = function(inputKey)
         return false
     end
     token, sessionId, leaseUntil = data.token, data.sessionId, deadline
+    if view then view.keyBox.PlaceholderText = "已登录；Key 已清理" end
     requestSequence = 0
     setStatus("授权有效 · " .. (data.kind == "MEMBER" and "全游戏会员" or "单游戏 30 天") .. " · 到期 " .. tostring(data.entitlementExpiresAt or "长期"))
     return true
 end
 
-run = function(script, inputKey)
+run = function(script)
     if not owner.alive then return end
+    if not token then setStatus("请先校验 Key 后再加载脚本") return end
+    if os.clock() >= leaseUntil then terminate("运行租约已到期") return end
     if scriptStarted then setStatus("本局已启动脚本；切换或重载请结束本局后重新进入游戏") return end
     if loading then return end
     if not script.enabled then setStatus("此脚本仍待接入验收") return end
@@ -144,9 +153,6 @@ run = function(script, inputKey)
         return
     end
     loading = true
-    local authenticated = login(inputKey)
-    inputKey = nil
-    if not authenticated then loading = false return end
     local activeToken = token
     setStatus("正在下载 " .. script.nameZh .. "…")
     local data, err = api("POST", "/api/hub/scripts/" .. script.id .. "/load", {}, activeToken)
@@ -301,12 +307,32 @@ local function buildView(uiContext)
     toggle.Visible = false
     toggle.Position = UDim2.new(1, -132, 0, 12)
     toggle.Size = UDim2.fromOffset(116, 44)
+    local authPrompt = object("TextButton", { Name = "AuthPromptOverlay", Text = "", AutoButtonColor = false,
+        BackgroundColor3 = Color3.fromRGB(0, 0, 0), BackgroundTransparency = 0.3, BorderSizePixel = 0,
+        Size = UDim2.fromScale(1, 1), Visible = false, Active = true, Modal = true, ZIndex = 50 }, panel)
+    local promptPanel = rounded(object("Frame", { Name = "AuthPrompt", AnchorPoint = Vector2.new(0.5, 0.5),
+        Position = UDim2.fromScale(0.5, 0.5), Size = UDim2.fromOffset(340, 196),
+        BackgroundColor3 = colors.surface, BorderSizePixel = 0, Active = true, ZIndex = 51 }, authPrompt), 12)
+    outline(promptPanel)
+    local promptTitle = text(promptPanel, "AuthPromptTitle", "请先校验 Key", 18)
+    promptTitle.Font, promptTitle.ZIndex = Enum.Font.GothamBold, 52
+    place(promptTitle, 20, 20, 300, 26)
+    local promptBody = text(promptPanel, "AuthPromptBody", "在左侧输入 Key 并完成校验后，再点击脚本加载。", 14, colors.muted)
+    promptBody.ZIndex = 52
+    place(promptBody, 20, 58, 300, 54)
+    local promptLater = button(promptPanel, "AuthPromptLater", "稍后")
+    promptLater.ZIndex = 52
+    place(promptLater, 20, 132, 112, 44)
+    local promptValidate = button(promptPanel, "AuthPromptValidate", "去校验 Key", true)
+    promptValidate.ZIndex = 52
+    place(promptValidate, 144, 132, 176, 44)
     local cards, cardParts, onlyCurrent = {}, {}, false
     local currentView = { context = uiContext, status = status, keyBox = keyBox }
     local function closeUI()
         if view == currentView then view = nil end
         uiContext.stop()
     end
+    currentView.dismissAuthPrompt = function() authPrompt.Visible = false end
     currentView.destroy = closeUI
     currentView.focus = function() gui.Enabled = true panel.Visible = true toggle.Visible = false end
     local function connect(signal, callback)
@@ -314,6 +340,22 @@ local function buildView(uiContext)
             if uiContext.alive then callback(...) end
         end)
         uiContext.onCleanup(function() connection:Disconnect() end)
+    end
+    connect(promptLater.Activated, currentView.dismissAuthPrompt)
+    connect(promptValidate.Activated, function()
+        currentView.dismissAuthPrompt()
+        if not loginBusy then pcall(function() keyBox:CaptureFocus() end) end
+    end)
+    local function requestScript(script)
+        if not uiContext.alive or not owner.alive then return end
+        if not token then
+            promptTitle.Text = loginBusy and "正在校验 Key" or "请先校验 Key"
+            promptBody.Text = loginBusy and "授权正在校验，请稍候。成功后再次点击脚本加载。" or "在左侧输入 Key 并完成校验后，再点击脚本加载。"
+            promptValidate.Text = loginBusy and "知道了" or "去校验 Key"
+            authPrompt.Visible = true
+            return
+        end
+        task.spawn(run, script)
     end
     local inputService = game:GetService("UserInputService")
     local dragInput, dragStart, dragOrigin, dragOffset, currentLayout = nil, nil, nil, Vector2.new(0, 0), nil
@@ -432,7 +474,7 @@ local function buildView(uiContext)
                 action.TextYAlignment = Enum.TextYAlignment.Center
                 action.TextXAlignment = Enum.TextXAlignment.Right
                 card.Activated:Connect(function()
-                    if uiContext.alive then task.spawn(run, script, keyBox.Text) end
+                    requestScript(script)
                 end)
                 cardParts[card] = { title = title, scenario = scenario, action = action }
                 table.insert(cards, card)
@@ -492,6 +534,9 @@ endSession = function(message)
     end
 end
 owner.focus = mountUI
+owner.submitKey = function(key)
+    if owner.alive and not token and not loginBusy then task.spawn(login, key) end
+end
 env.__RSZH_HUB = owner
 
 -- 看门狗独立于 HTTP 心跳；请求挂起时也按原租约截止时间结束本局。
@@ -530,12 +575,13 @@ task.spawn(function()
     end
 end)
 mountUI()
+if pendingKey ~= "" then owner.submitKey(pendingKey) end
 local data, err = api("GET", "/api/hub/catalog")
 if not owner.alive then return end
 if data and type(data.scripts) == "table" then
     catalog = data.scripts
     if view then view.render() end
-    if not token then setStatus("目录已就绪；关闭界面仍后台校验，授权失效将结束本局") end
+    if statusMessage == "正在获取正式目录…" then setStatus("目录已就绪；请先校验 Key，再选择脚本加载") end
 else
     setStatus("目录下载失败：" .. errorText(err))
 end
