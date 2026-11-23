@@ -96,7 +96,7 @@ local function fixture(options)
         Instance={new=create},UDim2=rb.UDim2,UDim=rb.UDim,Vector2=rb.Vector2,Color3=rb.Color3,Enum=rb.Enum,
         warn=function(message)table.insert(counter.warnings,message)end,
     }
-    local entry={id="hall-7",gameId="demo",nameZh="授权检查",nameEn="Check",enabled=true,universal=true,lifecycle="managed",placeIds={},universeIds={},tags={},aliases={}}
+    local entry={id="hall-7",gameId="demo",nameZh="授权检查",nameEn="Check",enabled=true,universal=true,lifecycle="managed",placeIds={},universeIds={},tags={},aliases={},shortDescription="检查当前游戏的授权连接与运行状态。"}
     environment.request=function(args)
         if not args.Body then assert(args.Headers["Content-Type"]==nil,"空正文请求不声明 JSON") end
         local data, err, status
@@ -105,7 +105,7 @@ local function fixture(options)
             if options.destroyDuringCatalog then
                 for _,o in ipairs(objects)do if o.Name=="RSZH_Hub" and not o.destroyed then o:Destroy()end end
             end
-            data={version="hall-fixture",scripts={entry}}
+            data={version="hall-fixture",scripts=options.catalog or {entry}}
         elseif args.Url:find("/heartbeat",1,true) then
             counter.heartbeats+=1;local networkFailure=server.networkHeartbeat;task.wait(server.delayHeartbeat)
             if networkFailure then err="NETWORK_ERROR";status=503
@@ -139,7 +139,16 @@ local function fixture(options)
     end
     local client=luau.load(clientSource,{environment=environment})
     local f={counter=counter,server=server,env=hubEnv,objects=objects,find=find,client=client}
-    function f.click(text)find(text).Activated:Fire()end
+    function f.byName(name)
+        for _,item in ipairs(objects) do if item.Name==name and not item.destroyed then return item end end
+        error("对象缺失："..name)
+    end
+    function f.resize(width,height)
+        local viewport=f.byName("HubViewport")
+        viewport.AbsoluteSize=rb.Vector2.new(width,height)
+        viewport:GetPropertyChangedSignal("AbsoluteSize"):Fire()
+    end
+    function f.click(text)local target=find(text);assert(target.Visible~=false,"点击目标应可见");target.Activated:Fire()end
     function f.play()f.click("授权检查")end
     function f.close()
         local ok,button=pcall(find,"关闭界面")
@@ -176,21 +185,54 @@ local function check(name,callback)
     passed+=1
 end
 
+-- Optional scene export uses synthetic catalog data; no live API or real Key is read.
+if process.env.HUB_UI_PREVIEW_DIR then
+    check("导出三端布局预览",function()
+        local sample={}
+        local names={"资源收集助手","地图快捷导航","角色状态面板","画面与性能设置","采集路径标记","通用界面工具"}
+        local descriptions={"将常用采集操作集中到一个入口，减少重复操作。","整理地图位置与传送入口，快速找到下一处目标。","集中查看角色状态与当前任务，重要信息一眼可见。","按需调整画面表现，减少游玩时的视觉干扰。","标记常用路线与兴趣点，让探索更有方向。","跨游戏使用的轻量工具，保持简洁一致的操作。"}
+        for index,name in ipairs(names) do table.insert(sample,{id="hall-"..index,gameId="preview",nameZh=name,nameEn="Preview "..index,shortDescription=descriptions[index],enabled=true,universal=index>3,placeIds=index<=3 and {2} or {},universeIds={},aliases={},tags={}}) end
+        local cases={{"pc",1440,900,1040,720},{"tablet",1024,768,962,691},{"phone",844,390,793,351},{"landscape",667,375,627,337}}
+        local output=process.env.HUB_UI_PREVIEW_DIR
+        fs.writeDir(output)
+        for _,screen in ipairs(cases) do
+            local f=fixture({catalog=sample});f.resize(screen[4],screen[5])
+            local nodes,ids={},{}
+            for index,o in ipairs(f.objects) do ids[o]=index end
+            local function dim(value)return value and {value.X.Scale,value.X.Offset,value.Y.Scale,value.Y.Offset} or nil end
+            local function color(value)return value and {math.round(value.R*255),math.round(value.G*255),math.round(value.B*255)} or nil end
+            for index,o in ipairs(f.objects) do
+                if not o.destroyed then
+                    local entry={id=index,parent=ids[o.Parent],class=o.ClassName,name=o.Name,text=o.Text,placeholder=o.PlaceholderText,
+                        position=dim(o.Position),size=dim(o.Size),visible=o.Visible,background=color(o.BackgroundColor3),textColor=color(o.TextColor3),
+                        backgroundTransparency=o.BackgroundTransparency,textTransparency=o.TextTransparency,textSize=o.TextSize,
+                        font=o.Font and tostring(o.Font),align=o.TextXAlignment and tostring(o.TextXAlignment),vertical=o.TextYAlignment and tostring(o.TextYAlignment),
+                        order=o.LayoutOrder,scrolling=o.ScrollingEnabled,canvas=dim(o.CanvasSize),cellSize=dim(o.CellSize),cellPadding=dim(o.CellPadding),columns=o.FillDirectionMaxCells,
+                        anchor=o.AnchorPoint and {o.AnchorPoint.X,o.AnchorPoint.Y},radius=o.CornerRadius and o.CornerRadius.Offset,stroke=color(o.Color),scale=o.Scale}
+                    if o.Name=="HubViewport" then entry.size={0,screen[4],0,screen[5]} end
+                    table.insert(nodes,entry)
+                end
+            end
+            fs.writeFile(output.."/"..screen[1]..".json",serde.encode("json",{width=screen[2],height=screen[3],nodes=nodes}))
+        end
+    end)
+end
+
 check("原样执行、搜索布局、关闭与单实例恢复",function()
     local f=fixture();local panel,search
     for _,o in ipairs(f.objects)do
-        if o.ClassName=="ScrollingFrame" and o.Parent and o.Parent.ClassName=="ScreenGui" then panel=o end
-        if o.PlaceholderText=="搜索脚本名称、别名或标签…" then search=o end
+        if o.Name=="HubWindow" then panel=o end
+        if o.Name=="ScriptSearch" then search=o end
     end
-    assert(panel and search);panel.AbsoluteSize=rb.Vector2.new(340,300);panel:GetPropertyChangedSignal("AbsoluteSize"):Fire()
-    assert(panel.CanvasSize.Y.Offset>=590)
+    assert(panel and search);f.resize(640,320)
+    assert(not panel.ScrollingEnabled and f.byName("ScriptGrid").ScrollingEnabled)
     search.Text="没有这个脚本";search:GetPropertyChangedSignal("Text"):Fire();assert(f.find("没有匹配的脚本").Visible~=false)
     search.Text="";search:GetPropertyChangedSignal("Text"):Fire()
     f.play();untilTrue(function()return f.counter.starts==1 end)
     assert(f.counter.sources[1]==originalSource,"正文逐字执行，不注入代码")
     f.play();task.wait(0.02);assert(f.counter.starts==1)
-    f.click("收起 Hub");assert(f.find("打开 Hub"));f.env.HUB_KEY="RSH_"..string.rep("b",43)
-    f.client();assert(f.find("收起 Hub") and f.counter.logins==1 and f.env.HUB_KEY==nil)
+    f.click("收起");assert(f.byName("ToggleHub").Visible and not panel.Visible);f.env.HUB_KEY="RSH_"..string.rep("b",43)
+    f.client();assert(f.byName("HubWindow").Visible and not f.byName("ToggleHub").Visible and f.counter.logins==1 and f.env.HUB_KEY==nil)
     f.close()
     assert(#f.counter.kicks==0 and f.counter.deletes==0 and f.owner.alive and f.env.__RSZH_HUB==f.owner)
     f.client();assert(f.find("本局已启动") and f.counter.guiLookups==2)
@@ -198,6 +240,72 @@ check("原样执行、搜索布局、关闭与单实例恢复",function()
     f.finish();untilTrue(function()return f.counter.deletes==1 end)
     assert(#f.counter.kicks==1 and f.counter.cleanups==0,"返回函数不当作卸载契约")
     assert(not f.env.__RSZH_HUB)
+end)
+check("PC、平板、手机及横屏布局与触控区域",function()
+    local f=fixture()
+    for _,size in ipairs({{1040,720,3},{962,691,3},{793,351,3},{627,337,3},{640,300,3}}) do
+        f.resize(size[1],size[2])
+        local layout=Runtime.layout(size[1],size[2],1)
+        local window,list,grid=f.byName("HubWindow"),f.byName("ScriptGrid"),f.byName("CardLayout")
+        assert(grid.ClassName=="UIGridLayout" and grid.FillDirectionMaxCells==size[3])
+        local heading,collapse,close=f.byName("Heading"),f.byName("CollapseView"),f.byName("CloseView")
+        assert(heading.Position.X.Offset+heading.Size.X.Offset<=collapse.Position.X.Offset)
+        assert(collapse.Position.X.Offset+collapse.Size.X.Offset<=close.Position.X.Offset)
+        assert(not f.byName("ToggleHub").Visible,"展开时浮动恢复按钮不遮挡内容")
+        assert(not window.ScrollingEnabled and list.ScrollingEnabled,"仅卡片区域滚动")
+        assert(window.Size.X.Offset>window.Size.Y.Offset and grid.FillDirectionMaxCells==3,"始终使用横版三列")
+        assert(window.Size.X.Offset*layout.scale<=size[1]+0.01 and window.Size.Y.Offset*layout.scale<=size[2]+0.01,"小屏整体缩放后位于视口内")
+        assert(grid.CellSize.X.Offset>0 and grid.CellSize.Y.Offset==layout.cardHeight)
+        local stop=f.byName("EndSession")
+        assert(list.Position.Y.Offset+list.Size.Y.Offset<=stop.Position.Y.Offset or list.Position.X.Offset>=stop.Position.X.Offset+stop.Size.X.Offset,"卡片不覆盖结束按钮")
+        for _,name in ipairs({"ValidateKey","CloseView","CollapseView","EndSession","AllScripts","AvailableScripts","ToggleHub"}) do
+            assert(f.byName(name).Size.Y.Offset>=44,"触控目标至少44px："..name)
+        end
+        local footer=f.byName("EndSession")
+        local bottom=footer.Position.Y.Offset+footer.Size.Y.Offset
+        assert(bottom<=layout.height)
+    end
+    assert(f.byName("ShortDescription").Text=="检查当前游戏的授权连接与运行状态。")
+    assert(f.byName("ShortDescription").RichText==false)
+end)
+check("ZS 品牌与 f0644b 主题色保持一致",function()
+    local f=fixture()
+    local accent=rb.Color3.fromRGB(240,100,75)
+    assert(f.byName("Brand").Text=="ZS" and f.byName("Heading").Text=="ZS HUB")
+    assert(f.byName("Brand").BackgroundColor3==accent)
+    assert(f.byName("ValidateKey").BackgroundColor3==accent)
+    assert(f.byName("CardAction").TextColor3==accent)
+    assert(f.byName("AllScripts").TextColor3==accent)
+    f.click("当前可用");assert(f.byName("AvailableScripts").TextColor3==accent)
+end)
+check("名称、简介搜索与当前可用筛选不触发登录或脚本加载",function()
+    local scripts={
+        {id="hall-8",gameId="other",nameZh="其他游戏工具",nameEn="Other",enabled=true,universal=false,placeIds={},universeIds={99},shortDescription="仅其他游戏适用",tags={},aliases={}},
+        {id="hall-7",gameId="demo",nameZh="当前游戏工具",nameEn="Current",enabled=true,universal=false,placeIds={2},universeIds={1},shortDescription="收集物品与快捷导航",tags={},aliases={}},
+        {id="hall-9",gameId="common",nameZh="通用工具",nameEn="Common",enabled=true,universal=true,placeIds={},universeIds={},tags={},aliases={}},
+    }
+    local f=fixture({catalog=scripts})
+    assert(f.byName("ScriptCard_hall-7").LayoutOrder==1)
+    assert(f.byName("ScriptCard_hall-9").LayoutOrder==2)
+    assert(f.byName("ScriptCard_hall-8").LayoutOrder==3)
+    f.click("当前可用")
+    assert(not pcall(f.byName,"ScriptCard_hall-8") and f.byName("ScriptCount").Text=="2 个脚本")
+    assert(f.byName("ScriptCard_hall-9").Selectable)
+    f.click("全部脚本");assert(f.byName("ScriptCount").Text=="3 个脚本")
+    local search=f.byName("ScriptSearch")
+    search.Text="快捷导航";search:GetPropertyChangedSignal("Text"):Fire()
+    assert(f.byName("ScriptCount").Text=="1 个脚本")
+    assert(f.byName("ScriptCard_hall-7"))
+    assert(f.counter.logins==0 and f.counter.loads==0 and #f.counter.kicks==0)
+end)
+check("空目录、旧 API 缺少简介与长文本均有稳定布局",function()
+    local f=fixture({catalog={}})
+    assert(f.byName("EmptyState").Visible and f.byName("EmptyState").Parent~=f.byName("ScriptGrid"))
+    assert(f.byName("ScriptCount").Text=="0 个脚本")
+    local long=fixture({catalog={{id="hall-7",gameId="demo",nameZh=string.rep("很长的中文标题",15),nameEn="Long",enabled=true,universal=true,placeIds={},universeIds={},tags={},aliases={}}}})
+    long.resize(627,337)
+    assert(long.byName("ShortDescription").Text=="作者暂未填写脚本简介")
+    assert(long.byName("ScriptName").TextWrapped and long.byName("ScriptName").TextTruncate==rb.Enum.TextTruncate.AtEnd)
 end)
 check("原生断开先于尽力注销请求",function()
     local f=fixture();f.play();untilTrue(function()return f.counter.starts==1 end)

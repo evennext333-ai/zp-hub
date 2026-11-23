@@ -51,7 +51,7 @@ function Runtime.search(scripts, query, universeId, placeId)
     local result = {}
     query = string.lower(query or "")
     for _, script in ipairs(scripts) do
-        local words = { script.nameZh, script.nameEn, script.id, script.gameId }
+        local words = { script.nameZh, script.nameEn, script.id, script.gameId, type(script.shortDescription) == "string" and script.shortDescription or "" }
         for _, word in ipairs(script.aliases or {}) do table.insert(words, word) end
         for _, word in ipairs(script.tags or {}) do table.insert(words, word) end
         if string.find(string.lower(table.concat(words, " ")), query, 1, true) then
@@ -64,6 +64,36 @@ function Runtime.search(scripts, query, universeId, placeId)
         return a.id < b.id
     end)
     return result
+end
+
+-- One horizontal workspace on every device; undersized viewports scale it as a unit.
+function Runtime.layout(availableWidth, availableHeight, count)
+    availableWidth = math.max(1, tonumber(availableWidth) or 600)
+    availableHeight = math.max(1, tonumber(availableHeight) or 560)
+    local width = math.max(700, math.min(1040, availableWidth))
+    local height = math.max(340, math.min(720, availableHeight, math.floor(width * 0.7)))
+    local scale = math.min(1, availableWidth / width, availableHeight / height)
+    count = math.max(0, tonumber(count) or 0)
+    local compact = width < 900 or height < 580
+    local pad, gap, cardHeight = 20, 12, compact and 156 or 188
+    local left = compact and 220 or 256
+    local mainWidth = width - left - pad
+    local columns = 3
+    local cellWidth = math.floor((mainWidth - 8 - gap * (columns - 1)) / columns)
+    local rows = math.ceil(count / columns)
+    local gridContentHeight = rows > 0 and rows * cardHeight + (rows - 1) * gap + 4 or 100
+    local mainTop = compact and 64 or 80
+    local gridTop, footerY = mainTop + 100, height - 62
+    return { width = width, height = height, scale = scale, pad = pad, gap = gap,
+        cardHeight = cardHeight, compact = compact, left = left, mainWidth = mainWidth,
+        mainTop = mainTop, gridTop = gridTop, columns = columns, cellWidth = cellWidth,
+        gridContentHeight = gridContentHeight, footerY = footerY,
+        gridHeight = compact and height - gridTop - 20 or footerY - gridTop - 14 }
+end
+
+function Runtime.description(script)
+    local value = type(script.shortDescription) == "string" and script.shortDescription:gsub("%s+", " "):match("^%s*(.-)%s*$") or ""
+    return value ~= "" and value or "作者暂未填写脚本简介"
 end
 
 function Runtime.deadline(sentAt, remaining)

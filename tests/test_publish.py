@@ -52,6 +52,7 @@ class PublishTests(unittest.TestCase):
             self.assertFalse((output / "scripts").exists())
             self.assertFalse((output / "manifest.json").exists())
             notice = (output / "NOTICE.txt").read_text()
+            self.assertTrue(notice.startswith("ZS Hub " + (root / "VERSION").read_text().strip() + "\n"))
             self.assertIn(f"Loader: {publish.LOADER_URL}", notice)
             self.assertIn("API: https://www.zldelf.cloud/api", notice)
             digest = hashlib.sha256((output / "loader.lua").read_bytes()).hexdigest()

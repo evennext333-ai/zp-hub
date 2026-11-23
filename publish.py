@@ -28,7 +28,7 @@ def prepare(api, output, prometheus_dir, lua="lua5.1"):
         if not loader.is_file() or not 1 <= loader.stat().st_size <= 2 * 1024 * 1024:
             raise ValueError("混淆产物缺失或大小异常")
         notice = (
-            f"RSZH Hub {manifest['version']}\n"
+            f"ZS Hub {manifest['version']}\n"
             f"API: {api_url(api)}/api\n"
             f"Loader: {LOADER_URL}\n"
             f"Prometheus commit: {PROMETHEUS_COMMIT}\n"
