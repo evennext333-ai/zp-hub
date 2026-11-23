@@ -16,7 +16,7 @@ end
 local function fixture(options)
     options = options or {}
     local objects, threads = {}, {}
-    local counter = {logins=0, loads=0, heartbeats=0, deletes=0, catalogs=0, guiLookups=0, starts=0, cleanups=0, kicks={}, warnings={}, sources={}}
+    local counter = {logins=0, loads=0, heartbeats=0, deletes=0, loadIds={}, catalogs=0, guiLookups=0, starts=0, cleanups=0, kicks={}, warnings={}, sources={}}
     local server = {source=options.source or originalSource, lease=options.lease or 90,
         delayLogin=options.delayLogin or 0, delayLoad=options.delayLoad or 0,
         delayHeartbeat=options.delayHeartbeat or 0, loginError=options.loginError,
@@ -50,6 +50,7 @@ local function fixture(options)
                 return nil
             end,
             __newindex=function(_,key,value)
+                if server.uiWriteError and key=="Text" then error("fixture UI write error") end
                 if key=="Parent" then
                     native.Parent=type(value)=="table" and value.native or nil
                 elseif key~="AbsoluteSize" and key~="destroyed" then
@@ -119,7 +120,8 @@ local function fixture(options)
         Instance={new=create},UDim2=rb.UDim2,UDim=rb.UDim,Vector2=rb.Vector2,Color3=rb.Color3,Enum=rb.Enum,
         warn=function(message)table.insert(counter.warnings,message)end,
     }
-    local entry={id="hall-7",gameId="demo",nameZh="授权检查",nameEn="Check",enabled=true,universal=true,lifecycle="managed",placeIds={},universeIds={},tags={},aliases={},scenario="授权连接 / 状态检查",shortDescription="不应显示这段简介"}
+    if options.fastHeartbeats then environment.os=table.clone(os);environment.os.clock=function()return os.clock()*80 end end
+    local entry={id="hall-7",gameId="demo",nameZh="授权检查",nameEn="Check",enabled=true,universal=false,lifecycle="managed",placeIds={2},universeIds={1},tags={},aliases={},scenario="授权连接 / 状态检查",shortDescription="不应显示这段简介"}
     environment.request=function(args)
         if not args.Body then assert(args.Headers["Content-Type"]==nil,"空正文请求不声明 JSON") end
         local data, err, status
@@ -134,18 +136,22 @@ local function fixture(options)
             if networkFailure then err="NETWORK_ERROR";status=503
             else err=server.heartbeatError end
             local body=serde.decode("json",args.Body)
-            data={sessionId=server.invalidHeartbeat and "another-session" or "fixture",sequence=body.sequence,remainingLeaseSeconds=90}
+            data={sessionId=server.invalidHeartbeat and "another-session" or "fixture",sequence=body.sequence,remainingLeaseSeconds=90,kind=options.kind or "GAME",gameId=options.gameId or "demo",entitlementExpiresAt=options.expiresAt}
         elseif args.Url:find("/load",1,true) then
-            assert(args.Url:find("/api/hub/scripts/hall-7/load",1,true))
+            local id=args.Url:match("/api/hub/scripts/(hall%-%d+)/load$")
+            local exists=false
+            for _,script in ipairs(options.catalog or {entry})do if script.id==id then exists=true end end
+            assert(exists,"仅加载目录中存在的脚本")
+            table.insert(counter.loadIds,id)
             counter.loads+=1;task.wait(server.delayLoad);err=server.loadError
-            data={id=entry.id,version="hall-7-r1",source=server.source}
+            data={id=id,version=id.."-r1",source=server.source}
         elseif args.Method=="DELETE" then counter.deletes+=1;counter.logoutSawKicks=#counter.kicks;data=serde.null
         else
             local body=serde.decode("json",args.Body)
             assert(body.key==(options.expectedKey or "RSH_"..string.rep("a",43)),"仅发送夹具指定 Key")
             counter.logins+=1;task.wait(server.delayLogin);err=server.loginError
             if server.loginNetworkOnce and counter.logins==1 then err="NETWORK_ERROR";status=503 end
-            data={token="HS1.fixture",sessionId="fixture",remainingLeaseSeconds=server.lease,kind="GAME"}
+            data={token="HS1.fixture",sessionId="fixture",remainingLeaseSeconds=server.lease,kind=options.kind or "GAME",gameId=options.gameId or "demo",entitlementExpiresAt=options.expiresAt}
         end
         if err then return {StatusCode=status or 401,Body=serde.encode("json",{success=false,error={code=err}})} end
         return {StatusCode=200,Body=serde.encode("json",{success=true,data=data})}
@@ -186,7 +192,7 @@ local function fixture(options)
     function f.destroy()for _,o in ipairs(objects)do if o.Name=="RSZH_Hub" and not o.destroyed then o:Destroy()end end end
     counter.clearUI=f.destroy
     function f.cleanup()
-        server.guiUnavailable=false;server.guiDelay=nil
+        server.guiUnavailable=false;server.guiDelay=nil;server.uiWriteError=false
         pcall(f.finish)
         if f.owner then assert(not f.owner.alive, "手动结束本局应终止控制器") end
         for _,thread in ipairs(threads)do if coroutine.status(thread)~="dead" then pcall(task.cancel,thread)end end
@@ -222,11 +228,11 @@ if process.env.HUB_UI_PREVIEW_DIR then
         local names={"资源收集助手","地图快捷导航","角色状态面板","画面与性能设置","采集路径标记","通用界面工具"}
         local descriptions={"资源采集 / 日常任务","地图探索 / 快捷导航","角色状态 / 任务追踪","画面调整 / 性能优化","路线标记 / 兴趣点","通用工具 / 界面管理"}
         for index,name in ipairs(names) do table.insert(sample,{id="hall-"..index,gameId="preview",nameZh=name,nameEn="Preview "..index,scenario=descriptions[index],shortDescription="不应显示简介",enabled=true,universal=index>3,placeIds=index<=3 and {2} or {},universeIds={},aliases={},tags={}}) end
-        local cases={{"pc",1440,900,1040,720},{"tablet",1024,768,962,691},{"phone",844,390,793,311},{"landscape",667,375,627,297}}
+        local cases={{"pc",1440,900,1040,720},{"tablet",1024,768,962,691},{"phone",844,390,793,311},{"landscape",667,375,627,297},{"pc-member",1440,900,1040,720,"MEMBER"},{"phone-member",844,390,793,311,"MEMBER"},{"phone-game",844,390,793,311,"GAME"}}
         local output=process.env.HUB_UI_PREVIEW_DIR
         fs.writeDir(output)
         for _,screen in ipairs(cases) do
-            local f=fixture({catalog=sample,noKey=true});f.resize(screen[4],screen[5])
+            local f=fixture({catalog=sample,noKey=not screen[6],kind=screen[6],gameId="preview",expiresAt="2027-04-08T16:05:33.375Z"});f.resize(screen[4],screen[5])
             local nodes,ids={},{}
             for index,o in ipairs(f.objects) do ids[o]=index end
             local function dim(value)return value and {value.X.Scale,value.X.Offset,value.Y.Scale,value.Y.Offset} or nil end
@@ -237,7 +243,7 @@ if process.env.HUB_UI_PREVIEW_DIR then
                         position=dim(o.Position),size=dim(o.Size),visible=o.Visible,background=color(o.BackgroundColor3),textColor=color(o.TextColor3),
                         backgroundTransparency=o.BackgroundTransparency,textTransparency=o.TextTransparency,textSize=o.TextSize,
                         font=o.Font and tostring(o.Font),align=o.TextXAlignment and tostring(o.TextXAlignment),vertical=o.TextYAlignment and tostring(o.TextYAlignment),
-                        order=o.LayoutOrder,scrolling=o.ScrollingEnabled,canvas=dim(o.CanvasSize),cellSize=dim(o.CellSize),cellPadding=dim(o.CellPadding),columns=o.FillDirectionMaxCells,
+                        zIndex=o.ZIndex,order=o.LayoutOrder,scrolling=o.ScrollingEnabled,canvas=dim(o.CanvasSize),cellSize=dim(o.CellSize),cellPadding=dim(o.CellPadding),columns=o.FillDirectionMaxCells,
                         anchor=o.AnchorPoint and {o.AnchorPoint.X,o.AnchorPoint.Y},radius=o.CornerRadius and o.CornerRadius.Offset,stroke=color(o.Color),scale=o.Scale}
                     if o.Name=="HubViewport" then entry.size={0,screen[4],0,screen[5]} end
                     table.insert(nodes,entry)
@@ -253,7 +259,7 @@ check("外部 Key 自动校验且不自动启动脚本",function()
     untilTrue(function()return f.counter.logins==1 and f.byName("SessionStatus").Text:find("授权有效",1,true)end)
     assert(f.counter.loads==0 and f.counter.starts==0 and f.env.HUB_KEY==nil)
     assert(f.byName("KeyInput").Text=="","完整 Key 不回填到界面")
-    assert(f.byName("KeyInput").PlaceholderText=="已登录；Key 已清理")
+    assert(not f.byName("KeyInput").Visible and not f.byName("ValidateKey").Visible)
     f.play();untilTrue(function()return f.counter.starts==1 end)
 end)
 check("未登录卡片弹窗不隐式提交输入的 Key",function()
@@ -322,26 +328,104 @@ check("旧版本单例不静默丢弃重新传入的 Key",function()
     assert(f.counter.logins==0 and #f.counter.warnings==1)
     assert(f.counter.warnings[1]:find("重新进入游戏",1,true) and f.env.HUB_KEY==nil)
 end)
+check("授权卡片分状态展示，恢复后保留格式化权益",function()
+    local f=fixture({kind="MEMBER",expiresAt="2027-04-08T16:05:33.375Z"})
+    assert(f.byName("AuthBadge").Text=="已校验" and f.byName("EntitlementKind").Text=="全游戏会员")
+    assert(f.byName("ExpiryValue").Text=="2027-04-09 00:05")
+    assert(f.byName("ExpiryLabel").Text=="到期时间 · 北京时间")
+    assert(not f.byName("KeyInput").Visible and not f.byName("ValidateKey").Visible and not f.byName("SessionStatus").Visible)
+    f.destroy();f.client()
+    assert(f.byName("ExpiryValue").Text=="2027-04-09 00:05" and f.counter.logins==1)
+    assert(f.byName("EntitlementKind").Visible and not f.byName("KeyInput").Visible)
+    local empty=fixture({noKey=true})
+    assert(empty.byName("AuthBadge").Text=="未校验" and empty.byName("KeyInput").Visible)
+    assert(not empty.byName("ExpiryValue").Visible and not empty.byName("EntitlementKind").Visible)
+    local busy=fixture({delayLogin=0.2})
+    assert(busy.byName("AuthBadge").Text=="校验中" and not busy.byName("ValidateKey").Active and not busy.byName("KeyInput").TextEditable)
+    untilTrue(function()return busy.byName("AuthBadge").Text=="已校验"end)
+end)
+check("后续心跳更新权益日期，不重复登录或影响租约",function()
+    local options={kind="MEMBER",expiresAt="2027-04-08T16:05:33.375Z",fastHeartbeats=true}
+    local f=fixture(options)
+    options.expiresAt="2027-05-01T00:00:00.000Z"
+    untilTrue(function()return f.byName("ExpiryValue").Text=="2027-05-01 08:00"end)
+    assert(f.counter.logins==1 and f.counter.loads==0 and #f.counter.kicks==0)
+end)
+check("长期会员和单游戏到期展示不改变后台截止时间",function()
+    local member=fixture({kind="MEMBER"})
+    assert(member.byName("ExpiryValue").Text=="长期有效")
+    local game=fixture({expiresAt="2027-01-01T00:00:00.000Z"})
+    assert(game.byName("EntitlementKind").Text=="单游戏 · 30 天" and game.byName("ExpiryValue").Text=="2027-01-01 08:00")
+end)
+local universalCatalog={
+    {id="hall-7",gameId="demo",nameZh="授权检查",nameEn="Current",enabled=true,universal=false,placeIds={2},universeIds={1},tags={},aliases={},scenario="当前场景"},
+    {id="hall-9",gameId="common",nameZh="通用工具",nameEn="Common",enabled=true,universal=true,placeIds={},universeIds={},tags={},aliases={},scenario="通用场景"},
+}
+check("全游戏会员手动加载通用脚本，同局仍仅启动一份原脚本",function()
+    local f=fixture({kind="MEMBER",catalog=universalCatalog})
+    assert(f.counter.loads==0,"登录不自动执行通用脚本")
+    f.byName("ScriptCard_hall-9").Activated:Fire();untilTrue(function()return f.counter.starts==1 end)
+    assert(f.counter.loadIds[1]=="hall-9" and f.byName("ScriptCard_hall-9").Parent.Name=="UniversalCards")
+    f.play();task.wait(0.03);assert(f.counter.loads==1 and f.counter.starts==1)
+    local function action(id)
+        for _,o in ipairs(f.objects)do if not o.destroyed and o.Name=="CardAction" and o.Parent.Name=="ScriptCard_"..id then return o.Text end end
+    end
+    assert(action("hall-9")=="运行中" and action("hall-7")=="重新进入后切换")
+    f.destroy();f.client();assert(action("hall-9")=="运行中" and f.counter.loads==1)
+end)
+check("单游戏 Key 的通用项目仍按 gameId 判断，不扩大权益",function()
+    local f=fixture({catalog=universalCatalog})
+    f.byName("ScriptCard_hall-9").Activated:Fire();task.wait(0.03)
+    assert(f.counter.loads==0 and #f.counter.kicks==0 and f.find("此 Key 未包含"))
+    local matching=fixture({catalog=universalCatalog,gameId="common"})
+    matching.byName("ScriptCard_hall-9").Activated:Fire();untilTrue(function()return matching.counter.starts==1 end)
+    assert(matching.counter.loadIds[1]=="hall-9")
+end)
+check("通用区未校验同样弹窗且不触发请求",function()
+    local f=fixture({catalog=universalCatalog,noKey=true})
+    f.byName("ScriptCard_hall-9").Activated:Fire()
+    assert(f.byName("AuthPromptOverlay").Visible and f.counter.logins==0 and f.counter.loads==0)
+end)
+check("没有当前游戏时仍可展示并加载通用脚本",function()
+    local f=fixture({catalog={universalCatalog[2]},kind="MEMBER"})
+    assert(f.byName("CurrentEmpty").Visible and not f.byName("UniversalEmpty").Visible)
+    f.byName("ScriptCard_hall-9").Activated:Fire();untilTrue(function()return f.counter.starts==1 end)
+end)
+for _,mode in ipairs({"close","destroy","collapse"})do
+    for _,code in ipairs({"HUB_SESSION_REPLACED","HUB_VIP_REQUIRED","HUB_LICENSE_EXPIRED"})do
+        check("不运行脚本时 UI "..mode.." 后仍结束失效授权 "..code,function()
+            local f=fixture()
+            if mode=="close" then f.close()elseif mode=="destroy" then f.destroy()else f.click("收起")end
+            f.server.heartbeatError=code
+            untilTrue(function()return #f.counter.kicks==1 end)
+            assert(f.counter.starts==0 and #f.counter.kicks==1 and not f.owner.alive)
+        end)
+    end
+end
+check("界面刷新异常只关闭视图，不中止后台授权心跳",function()
+    local f=fixture({fastHeartbeats=true})
+    f.server.uiWriteError=true
+    untilTrue(function()return #f.counter.warnings==1 end)
+    untilTrue(function()return f.counter.heartbeats>=2 end)
+    assert(f.owner.alive and #f.counter.kicks==0 and f.counter.deletes==0)
+    f.server.uiWriteError=false;f.client()
+    assert(f.byName("AuthBadge").Text=="已校验" and f.counter.logins==1)
+end)
 check("按钮中心锚点的偏移回归",function()
     local f=fixture({centeredButtons=true})
     for _,size in ipairs({{700,340},{793,351},{1040,720}})do
         f.resize(size[1],size[2])
-        for _,name in ipairs({"ValidateKey","CloseView","CollapseView","EndSession","AllScripts","AvailableScripts"})do
+        for _,name in ipairs({"ValidateKey","CloseView","CollapseView","EndSession"})do
             local item=f.byName(name)
             assert(item.AnchorPoint==rb.Vector2.new(0,0),"位置按左上角计算，必须显式重置锚点："..name)
         end
     end
 end)
-check("原样执行、搜索布局、关闭与单实例恢复",function()
-    local f=fixture();local panel,search
-    for _,o in ipairs(f.objects)do
-        if o.Name=="HubWindow" then panel=o end
-        if o.Name=="ScriptSearch" then search=o end
-    end
-    assert(panel and search);f.resize(640,320)
+check("原样执行、分区布局、关闭与单实例恢复",function()
+    local f=fixture();local panel=f.byName("HubWindow")
+    f.resize(640,320)
     assert(not panel.ScrollingEnabled and f.byName("ScriptGrid").ScrollingEnabled)
-    search.Text="没有这个脚本";search:GetPropertyChangedSignal("Text"):Fire();assert(f.find("没有匹配的脚本").Visible~=false)
-    search.Text="";search:GetPropertyChangedSignal("Text"):Fire()
+    assert(not pcall(f.byName,"ScriptSearch") and not pcall(f.byName,"AllScripts") and not pcall(f.byName,"AvailableScripts"))
     f.play();untilTrue(function()return f.counter.starts==1 end)
     assert(f.counter.sources[1]==originalSource,"正文逐字执行，不注入代码")
     f.play();task.wait(0.02);assert(f.counter.starts==1)
@@ -360,7 +444,7 @@ check("PC、平板、手机及横屏布局与触控区域",function()
     for _,size in ipairs({{1040,720,3},{962,691,3},{793,351,3},{627,337,3},{640,300,3}}) do
         f.resize(size[1],size[2])
         local layout=Runtime.layout(size[1],size[2],1)
-        local window,list,grid=f.byName("HubWindow"),f.byName("ScriptGrid"),f.byName("CardLayout")
+        local window,list,grid=f.byName("HubWindow"),f.byName("ScriptGrid"),f.byName("CurrentCardLayout")
         assert(grid.ClassName=="UIGridLayout" and grid.FillDirectionMaxCells==size[3])
         local heading,collapse,close=f.byName("Heading"),f.byName("CollapseView"),f.byName("CloseView")
         assert(heading.Position.X.Offset+heading.Size.X.Offset<=collapse.Position.X.Offset)
@@ -372,7 +456,7 @@ check("PC、平板、手机及横屏布局与触控区域",function()
         assert(grid.CellSize.X.Offset>0 and grid.CellSize.Y.Offset==layout.cardHeight)
         local stop=f.byName("EndSession")
         assert(list.Position.Y.Offset+list.Size.Y.Offset<=stop.Position.Y.Offset or list.Position.X.Offset>=stop.Position.X.Offset+stop.Size.X.Offset,"卡片不覆盖结束按钮")
-        for _,name in ipairs({"ValidateKey","CloseView","CollapseView","EndSession","AllScripts","AvailableScripts","ToggleHub"}) do
+        for _,name in ipairs({"ValidateKey","CloseView","CollapseView","EndSession","ToggleHub"}) do
             assert(f.byName(name).Size.Y.Offset>=44,"触控目标至少44px："..name)
         end
         local footer=f.byName("EndSession")
@@ -394,7 +478,7 @@ check("真实属性与缩放锚点几何检查",function()
         end
         local function apart(a,b)return a.x+a.w<=b.x or b.x+b.w<=a.x or a.y+a.h<=b.y or b.y+b.h<=a.y end
         assert(apart(rect("CollapseView"),rect("CloseView")),"收起和关闭不重叠")
-        assert(apart(rect("ScriptSearch"),rect("AllScripts")) and apart(rect("AllScripts"),rect("AvailableScripts")),"搜索与筛选不重叠")
+        assert(apart(rect("AuthTitle"),rect("AuthBadge")),"授权标题与状态不重叠")
         assert(apart(rect("KeyInput"),rect("ValidateKey")),"Key 输入与按钮不重叠")
         assert(f.byName("ValidateKey").Style==rb.Enum.ButtonStyle.Custom)
         assert(f.byName("HubWindow").ClassName=="Frame")
@@ -434,32 +518,43 @@ check("ZS 品牌与 f0644b 主题色保持一致",function()
     assert(f.byName("Brand").BackgroundColor3==accent)
     assert(f.byName("ValidateKey").BackgroundColor3==accent)
     assert(f.byName("CardAction").TextColor3==accent)
-    assert(f.byName("AllScripts").TextColor3==accent)
-    f.click("当前可用");assert(f.byName("AvailableScripts").TextColor3==accent)
+    assert(f.byName("CurrentCardLayout").FillDirectionMaxCells==3 and f.byName("UniversalCardLayout").FillDirectionMaxCells==3)
 end)
-check("名称、场景搜索与当前可用筛选不触发登录或脚本加载",function()
+check("仅显示当前游戏和通用两区，浏览不触发登录或加载",function()
     local scripts={
-        {id="hall-8",gameId="other",nameZh="其他游戏工具",nameEn="Other",enabled=true,universal=false,placeIds={},universeIds={99},scenario="仅其他游戏适用",tags={},aliases={}},
+        {id="hall-8",gameId="other",nameZh="其他游戏工具",nameEn="Other",enabled=true,universal=false,placeIds={},universeIds={99},tags={},aliases={}},
         {id="hall-7",gameId="demo",nameZh="当前游戏工具",nameEn="Current",enabled=true,universal=false,placeIds={2},universeIds={1},scenario="收集物品与快捷导航",tags={},aliases={}},
-        {id="hall-9",gameId="common",nameZh="通用工具",nameEn="Common",enabled=true,universal=true,placeIds={},universeIds={},tags={},aliases={}},
+        {id="hall-9",gameId="common",nameZh="通用工具",nameEn="Common",enabled=true,universal=true,placeIds={2},universeIds={},tags={},aliases={}},
     }
     local f=fixture({catalog=scripts,noKey=true})
-    assert(f.byName("ScriptCard_hall-7").LayoutOrder==1)
-    assert(f.byName("ScriptCard_hall-9").LayoutOrder==2)
-    assert(f.byName("ScriptCard_hall-8").LayoutOrder==3)
-    f.click("当前可用")
+    assert(f.byName("ScriptCard_hall-7").Parent.Name=="CurrentCards")
+    assert(f.byName("ScriptCard_hall-9").Parent.Name=="UniversalCards","通用优先按标记归类，不重复归当前游戏")
     assert(not pcall(f.byName,"ScriptCard_hall-8") and f.byName("ScriptCount").Text=="2 个脚本")
-    assert(f.byName("ScriptCard_hall-9").Selectable)
-    f.click("全部脚本");assert(f.byName("ScriptCount").Text=="3 个脚本")
-    local search=f.byName("ScriptSearch")
-    search.Text="快捷导航";search:GetPropertyChangedSignal("Text"):Fire()
-    assert(f.byName("ScriptCount").Text=="1 个脚本")
-    assert(f.byName("ScriptCard_hall-7"))
+    assert(f.byName("CurrentCount").Text=="1 个" and f.byName("UniversalCount").Text=="1 个")
+    assert(f.byName("UniversalSection").Position.Y.Offset>f.byName("CurrentSection").Position.Y.Offset)
     assert(f.counter.logins==0 and f.counter.loads==0 and #f.counter.kicks==0)
+end)
+check("分区滚动高度和跨设备授权信息不重叠",function()
+    local many={}
+    for i=1,30 do
+        table.insert(many,{id="hall-"..i,gameId="demo",nameZh="夹具项目"..i,nameEn="Fixture",enabled=true,universal=i>15,placeIds={2},universeIds={},tags={},aliases={}})
+    end
+    local f=fixture({catalog=many,kind="MEMBER",expiresAt="2027-04-08T16:05:33.375Z"})
+    for _,screen in ipairs({{1040,720},{962,691},{793,311},{627,297}})do
+        f.resize(screen[1],screen[2])
+        local current,universal=f.byName("CurrentSection"),f.byName("UniversalSection")
+        assert(current.Position.Y.Offset+current.Size.Y.Offset<universal.Position.Y.Offset)
+        assert(universal.Position.Y.Offset+universal.Size.Y.Offset<=f.byName("ScriptGrid").CanvasSize.Y.Offset)
+        assert(f.byName("ScriptGrid").CanvasSize.Y.Offset>f.byName("ScriptGrid").Size.Y.Offset)
+        assert(f.byName("CurrentCardLayout").FillDirectionMaxCells==3 and f.byName("UniversalCardLayout").FillDirectionMaxCells==3)
+        local label,value,note=f.byName("ExpiryLabel"),f.byName("ExpiryValue"),f.byName("GrantNote")
+        assert(label.Position.Y.Offset+label.Size.Y.Offset<=value.Position.Y.Offset and value.Position.Y.Offset+value.Size.Y.Offset<=note.Position.Y.Offset)
+        assert(note.Position.Y.Offset+note.Size.Y.Offset<=f.byName("Authorization").Size.Y.Offset)
+    end
 end)
 check("空目录、旧 API 缺少场景与长文本均有稳定布局",function()
     local f=fixture({catalog={}})
-    assert(f.byName("EmptyState").Visible and f.byName("EmptyState").Parent~=f.byName("ScriptGrid"))
+    assert(f.byName("CurrentEmpty").Visible and f.byName("UniversalEmpty").Visible and f.byName("CurrentEmpty").Parent~=f.byName("CurrentCards"))
     assert(f.byName("ScriptCount").Text=="0 个脚本")
     local long=fixture({catalog={{id="hall-7",gameId="demo",nameZh=string.rep("很长的中文标题",15),nameEn="Long",enabled=true,universal=true,placeIds={},universeIds={},tags={},aliases={}}}})
     long.resize(627,337)
@@ -488,7 +583,7 @@ check("过期登录响应仅提示并注销，不误踢",function()
     assert(f.find("登录响应已过期") and #f.counter.kicks==0 and f.counter.starts==0)
 end)
 check("未加载脚本的已登录会话也在失效时退出本局",function()
-    local f=fixture({heartbeatError="HUB_LICENSE_EXPIRED"});f.click("校验 Key")
+    local f=fixture({heartbeatError="HUB_LICENSE_EXPIRED"})
     untilTrue(function()return #f.counter.kicks==1 end);assert(f.counter.starts==0)
 end)
 check("独立看门狗与晚到心跳不复活",function()
@@ -526,7 +621,7 @@ end)
 check("登录期间关闭界面继续后台授权",function()
     local f=fixture({delayLogin=0.2});f.click("校验 Key");f.close();task.wait(0.3)
     assert(f.counter.deletes==0 and #f.counter.kicks==0 and f.owner.alive)
-    f.client();assert(f.find("授权有效"));f.click("校验 Key");task.wait(0.03)
+    f.client();assert(f.find("授权有效"));f.client();task.wait(0.03)
     assert(f.counter.logins==1)
 end)
 check("重试登录期间关闭界面不注销会话",function()
@@ -542,7 +637,7 @@ check("编译期间清理界面不取消原脚本",function()
     f.client();assert(f.find("运行中"))
 end)
 check("未运行时销毁界面保留已登录会话",function()
-    local f=fixture();f.click("校验 Key");untilTrue(function()return pcall(f.find,"授权有效")end)
+    local f=fixture();untilTrue(function()return pcall(f.find,"授权有效")end)
     f.destroy();untilTrue(function()return f.counter.heartbeats==1 end)
     assert(f.counter.deletes==0 and #f.counter.kicks==0 and f.env.__RSZH_HUB==f.owner)
     f.client();assert(f.find("授权有效") and f.counter.logins==1)
@@ -580,7 +675,7 @@ check("Kick 报错不伪报成功，停止加载与续租",function()
     local f=fixture({heartbeatError="HUB_SESSION_REPLACED",kickFails=true});f.play()
     untilTrue(function()return #f.counter.warnings==1 end);assert(f.find("请立即手动离开本局"))
     local logins,loads,heartbeats=f.counter.logins,f.counter.loads,f.counter.heartbeats
-    f.click("校验 Key");f.play();task.wait(0.3)
+    f.byName("ValidateKey").Activated:Fire();f.play();task.wait(0.3)
     assert(f.counter.logins==logins and f.counter.loads==loads and f.counter.heartbeats==heartbeats and #f.counter.kicks==1)
 end)
 check("关闭界面后顶号仍只结束一次本局",function()

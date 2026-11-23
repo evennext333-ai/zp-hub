@@ -67,7 +67,7 @@ function Runtime.search(scripts, query, universeId, placeId)
 end
 
 -- One horizontal workspace on every device; undersized viewports scale it as a unit.
-function Runtime.layout(availableWidth, availableHeight, count)
+function Runtime.layout(availableWidth, availableHeight, count, universalCount)
     availableWidth = math.max(1, tonumber(availableWidth) or 600)
     availableHeight = math.max(1, tonumber(availableHeight) or 560)
     local width = math.max(700, math.min(1040, availableWidth))
@@ -80,14 +80,18 @@ function Runtime.layout(availableWidth, availableHeight, count)
     local mainWidth = width - left - pad
     local columns = 3
     local cellWidth = math.floor((mainWidth - 8 - gap * (columns - 1)) / columns)
-    local rows = math.ceil(count / columns)
-    local gridContentHeight = rows > 0 and rows * cardHeight + (rows - 1) * gap + 4 or 100
+    local function sectionHeight(items)
+        local sectionRows = math.ceil(math.max(0, tonumber(items) or 0) / columns)
+        return 32 + (sectionRows > 0 and sectionRows * cardHeight + (sectionRows - 1) * gap + 4 or 44)
+    end
+    local currentHeight, universalHeight = sectionHeight(count), sectionHeight(universalCount)
+    local gridContentHeight = currentHeight + 16 + universalHeight
     local mainTop = compact and 64 or 80
-    local gridTop, footerY = mainTop + 100, height - 62
+    local gridTop, footerY = mainTop + 64, height - 62
     return { width = width, height = height, scale = scale, pad = pad, gap = gap,
         cardHeight = cardHeight, compact = compact, left = left, mainWidth = mainWidth,
         mainTop = mainTop, gridTop = gridTop, columns = columns, cellWidth = cellWidth,
-        gridContentHeight = gridContentHeight, footerY = footerY,
+        gridContentHeight = gridContentHeight, currentHeight = currentHeight, universalHeight = universalHeight, footerY = footerY,
         gridHeight = compact and height - gridTop - 20 or footerY - gridTop - 14 }
 end
 
@@ -95,6 +99,26 @@ function Runtime.scenario(script)
     if type(script.scenario) ~= "string" then return "场景信息待接口同步" end
     local value = script.scenario:gsub("%s+", " "):match("^%s*(.-)%s*$")
     return value ~= "" and value or "未设置场景"
+end
+
+-- 后端日期为 UTC ISO；只调整展示，不参与授权或租约判断。
+function Runtime.formatExpiry(value)
+    if value == nil then return "长期有效" end
+    if type(value) ~= "string" then return "时间待同步" end
+    local y, m, d, h, minute, second, tail = value:match("^(%d%d%d%d)%-(%d%d)%-(%d%d)T(%d%d):(%d%d):(%d%d)(.-)Z$")
+    if not y or (tail ~= "" and not tail:match("^%.%d+$")) then return "时间待同步" end
+    y, m, d, h, minute, second = tonumber(y), tonumber(m), tonumber(d), tonumber(h), tonumber(minute), tonumber(second)
+    local days = {31, (y % 4 == 0 and (y % 100 ~= 0 or y % 400 == 0)) and 29 or 28, 31,30,31,30,31,31,30,31,30,31}
+    if y < 1 or m < 1 or m > 12 or d < 1 or d > days[m] or h > 23 or minute > 59 or second > 59 then return "时间待同步" end
+    h += 8
+    if h >= 24 then
+        h -= 24
+        d += 1
+        if d > days[m] then d, m = 1, m + 1 end
+        if m > 12 then m, y = 1, y + 1 end
+    end
+    if y > 9999 then return "时间待同步" end
+    return string.format("%04d-%02d-%02d %02d:%02d", y, m, d, h, minute)
 end
 
 function Runtime.deadline(sentAt, remaining)

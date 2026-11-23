@@ -1,6 +1,14 @@
 local fs = require("@lune/fs")
 local luau = require("@lune/luau")
 local Runtime = luau.load(fs.readFile("src/runtime.lua"))()
+assert(Runtime.formatExpiry("2027-04-08T16:05:33.375Z")=="2027-04-09 00:05")
+assert(Runtime.formatExpiry("2026-12-31T23:59:00Z")=="2027-01-01 07:59")
+assert(Runtime.formatExpiry("2028-02-28T20:01:00Z")=="2028-02-29 04:01")
+assert(Runtime.formatExpiry("2027-02-28T20:01:00Z")=="2027-03-01 04:01")
+assert(Runtime.formatExpiry(nil)=="长期有效")
+for _,value in ipairs({"bad","2027-02-29T12:00:00Z","2027-01-01T25:00:00Z","2027-01-01T10:00:00+08:00",123})do
+    assert(Runtime.formatExpiry(value)=="时间待同步")
+end
 local context = Runtime.lifecycle()
 local events = {}
 local target = { value = 1 }

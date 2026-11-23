@@ -28,6 +28,7 @@ local endSession, login, run, mountUI
 local view, mountingUI = nil, false
 local statusMessage = "正在获取正式目录…"
 local catalog = {}
+local entitlement, activeScriptId, loadingScriptId = nil, nil, nil
 local errors = {
     HUB_KEY_INVALID = "Key 无效或已重置", HUB_LICENSE_REVOKED = "权益已吊销",
     HUB_LICENSE_EXPIRED = "单游戏权益已到期", HUB_VIP_REQUIRED = "会员已到期或未开通",
@@ -43,9 +44,20 @@ local authorizationErrors = {
     HUB_SESSION_EXPIRED = true, HUB_SESSION_INVALID = true,
 }
 
+local function refreshView()
+    if view and view.context.alive then
+        local currentView = view
+        local ok = pcall(currentView.refresh)
+        if not ok then
+            currentView.destroy()
+            warn("[ZS Hub] 界面更新失败，请重新加载入口；后台授权监控继续")
+        end
+    end
+end
+
 local function setStatus(value)
     statusMessage = value
-    if view and view.context.alive then view.status.Text = value end
+    refreshView()
 end
 
 local function terminate(message)
@@ -108,7 +120,7 @@ login = function(inputKey)
     pendingKey = ""
     if view then
         view.keyBox.Text = ""
-        view.keyBox.PlaceholderText = "Key 已清理，请重新填写"
+        view.keyBox.PlaceholderText = "请重新输入 Key"
     end
     setStatus("正在校验授权…")
     local body = { key = key, hwid = hwid, requestId = Http:GenerateGUID(false), universeId = game.GameId, placeId = game.PlaceId }
@@ -135,9 +147,9 @@ login = function(inputKey)
         return false
     end
     token, sessionId, leaseUntil = data.token, data.sessionId, deadline
-    if view then view.keyBox.PlaceholderText = "已登录；Key 已清理" end
+    entitlement = { kind = data.kind, gameId = data.gameId, expiresAt = data.entitlementExpiresAt }
     requestSequence = 0
-    setStatus("授权有效 · " .. (data.kind == "MEMBER" and "全游戏会员" or "单游戏 30 天") .. " · 到期 " .. tostring(data.entitlementExpiresAt or "长期"))
+    setStatus("授权有效 · " .. (data.kind == "MEMBER" and "全游戏会员" or "单游戏 30 天"))
     return true
 end
 
@@ -153,23 +165,25 @@ run = function(script)
         return
     end
     loading = true
+    loadingScriptId = script.id
     local activeToken = token
     setStatus("正在下载 " .. script.nameZh .. "…")
     local data, err = api("POST", "/api/hub/scripts/" .. script.id .. "/load", {}, activeToken)
     if not owner.alive or token ~= activeToken then loading = false return end
     if os.clock() >= leaseUntil then terminate("运行租约已到期") loading = false return end
     if not data or type(data.source) ~= "string" then
+        loading = false
         if authorizationErrors[err] then terminate("授权已失效：" .. errorText(err))
         else setStatus("加载失败：" .. errorText(err or "INVALID_RESPONSE")) end
-        loading = false
         return
     end
     local compiled, fn = pcall(loadstring, data.source, "=Hub/" .. script.id)
     if not owner.alive then loading = false return end
     if os.clock() >= leaseUntil then terminate("运行租约已到期") loading = false return end
-    if not compiled or type(fn) ~= "function" then setStatus("脚本编译失败") loading = false return end
+    if not compiled or type(fn) ~= "function" then loading = false setStatus("脚本编译失败") return end
     -- 原文、运行环境、参数与返回值均保持原语义；启动后通过结束本局终止使用。
     scriptStarted = true
+    activeScriptId = script.id
     setStatus("正在启动 " .. script.nameZh .. "；关闭界面仍继续后台校验")
     if not owner.alive then loading = false return end
     local ok = pcall(fn)
@@ -179,6 +193,7 @@ run = function(script)
         setStatus("运行中：" .. script.nameZh .. "；关闭界面仍继续后台校验")
     end
     loading = false
+    refreshView()
 end
 
 -- UI 的资源作用域仅属于这一轮视图；销毁它不会改变授权控制器。
@@ -204,7 +219,7 @@ local function buildView(uiContext)
         input = Color3.fromRGB(20, 24, 33), border = Color3.fromRGB(46, 55, 72),
         text = Color3.fromRGB(240, 243, 250), muted = Color3.fromRGB(158, 170, 190),
         accent = Color3.fromRGB(240, 100, 75), ink = Color3.fromRGB(39, 19, 15),
-        chip = Color3.fromRGB(50, 30, 27), danger = Color3.fromRGB(244, 164, 164),
+        danger = Color3.fromRGB(244, 164, 164),
     }
     local function rounded(item, radius)
         object("UICorner", { CornerRadius = UDim.new(0, radius or 10) }, item)
@@ -270,22 +285,24 @@ local function buildView(uiContext)
         Active = true, Selectable = false, BorderSizePixel = 0, ZIndex = 8 }, panel)
     local closeButton = button(panel, "CloseView", "关闭界面")
     local collapseButton = button(panel, "CollapseView", "收起")
-    local sideTitle = text(panel, "SideTitle", "当前游戏", 12, colors.muted)
-    local sideValue = text(panel, "SideValue", "自动识别 · 当前适配优先", 15)
-    local sideNote = text(panel, "SideNote", "关闭窗口不影响运行。\n重新执行原入口即可恢复界面。", 12, colors.muted)
     local authorization = rounded(object("Frame", { Name = "Authorization", BackgroundColor3 = colors.surface, BorderSizePixel = 0 }, panel), 12)
     outline(authorization)
     local authTitle = text(authorization, "AuthTitle", "访问授权", 13)
+    local authBadge = text(authorization, "AuthBadge", "未校验", 11, colors.muted)
+    authBadge.TextXAlignment = Enum.TextXAlignment.Right
     local status = text(authorization, "SessionStatus", statusMessage, 12, colors.muted)
-    local keyBox = input(authorization, "KeyInput", token and "已登录；Key 已清理" or (pendingKey ~= "" and "已读取外部 Key" or "输入 Key 或设置 HUB_KEY"))
+    local keyBox = input(authorization, "KeyInput", "请输入 Key")
     local loginButton = button(authorization, "ValidateKey", "校验 Key", true)
+    local kindLabel = text(authorization, "EntitlementKind", "", 16)
+    kindLabel.Font = Enum.Font.GothamMedium
+    local expiryLabel = text(authorization, "ExpiryLabel", "到期时间 · 北京时间", 11, colors.muted)
+    local expiryValue = text(authorization, "ExpiryValue", "", 14)
+    local grantNote = text(authorization, "GrantNote", "", 12, colors.muted)
     local libraryTitle = text(panel, "LibraryTitle", "脚本库", 18)
     libraryTitle.Font = Enum.Font.GothamBold
+    local operationStatus = text(panel, "OperationStatus", "选择脚本后手动加载", 12, colors.muted)
     local countLabel = text(panel, "ScriptCount", "正在同步目录", 12, colors.muted)
     countLabel.TextXAlignment = Enum.TextXAlignment.Right
-    local searchBox = input(panel, "ScriptSearch", "搜索脚本名称、场景或标签…")
-    local allButton = button(panel, "AllScripts", "全部脚本")
-    local currentButton = button(panel, "AvailableScripts", "当前可用")
     local list = object("ScrollingFrame", {
         Name = "ScriptGrid", BackgroundTransparency = 1, BorderSizePixel = 0,
         ScrollBarThickness = 3, ScrollBarImageColor3 = colors.border,
@@ -293,13 +310,21 @@ local function buildView(uiContext)
         CanvasSize = UDim2.new(), ClipsDescendants = true,
     }, panel)
     object("UIPadding", { PaddingLeft = UDim.new(0, 2), PaddingRight = UDim.new(0, 2), PaddingTop = UDim.new(0, 2), PaddingBottom = UDim.new(0, 2) }, list)
-    local grid = object("UIGridLayout", { Name = "CardLayout", CellPadding = UDim2.fromOffset(12, 12),
-        CellSize = UDim2.fromOffset(260, 188), FillDirection = Enum.FillDirection.Horizontal,
-        HorizontalAlignment = Enum.HorizontalAlignment.Left, SortOrder = Enum.SortOrder.LayoutOrder }, list)
-    -- Empty state is a sibling of the grid, never a grid item.
-    local emptyLabel = text(panel, "EmptyState", "没有匹配的脚本\n试试其他名称、场景或标签", 14, colors.muted)
-    emptyLabel.TextXAlignment = Enum.TextXAlignment.Center
-    emptyLabel.Visible = false
+    local function section(name, title, emptyText)
+        local root = object("Frame", { Name = name .. "Section", BackgroundTransparency = 1, BorderSizePixel = 0 }, list)
+        local label = text(root, name .. "Title", title, 14)
+        label.Font = Enum.Font.GothamMedium
+        local count = text(root, name .. "Count", "0 个", 12, colors.muted)
+        count.TextXAlignment = Enum.TextXAlignment.Right
+        local content = object("Frame", { Name = name .. "Cards", BackgroundTransparency = 1, BorderSizePixel = 0 }, root)
+        local grid = object("UIGridLayout", { Name = name .. "CardLayout", CellPadding = UDim2.fromOffset(12, 12),
+            FillDirection = Enum.FillDirection.Horizontal, HorizontalAlignment = Enum.HorizontalAlignment.Left,
+            SortOrder = Enum.SortOrder.LayoutOrder }, content)
+        local empty = text(root, name .. "Empty", emptyText, 12, colors.muted)
+        return { root = root, title = label, count = count, content = content, grid = grid, empty = empty, size = 0 }
+    end
+    local currentSection = section("Current", "当前游戏", "当前游戏暂无适配脚本")
+    local universalSection = section("Universal", "通用脚本", "暂无通用脚本")
     local footerNote = text(panel, "FooterNote", "原脚本独立加载 · 授权在后台持续校验", 12, colors.muted)
     local stopButton = button(panel, "EndSession", "结束本局")
     stopButton.TextColor3 = colors.danger
@@ -326,7 +351,7 @@ local function buildView(uiContext)
     local promptValidate = button(promptPanel, "AuthPromptValidate", "去校验 Key", true)
     promptValidate.ZIndex = 52
     place(promptValidate, 144, 132, 176, 44)
-    local cards, cardParts, onlyCurrent = {}, {}, false
+    local cards, cardParts = {}, {}
     local currentView = { context = uiContext, status = status, keyBox = keyBox }
     local function closeUI()
         if view == currentView then view = nil end
@@ -346,6 +371,9 @@ local function buildView(uiContext)
         currentView.dismissAuthPrompt()
         if not loginBusy then pcall(function() keyBox:CaptureFocus() end) end
     end)
+    local function notGranted(script)
+        return entitlement and entitlement.kind == "GAME" and entitlement.gameId ~= script.gameId
+    end
     local function requestScript(script)
         if not uiContext.alive or not owner.alive then return end
         if not token then
@@ -355,7 +383,32 @@ local function buildView(uiContext)
             authPrompt.Visible = true
             return
         end
+        if notGranted(script) then setStatus("此 Key 未包含该游戏，请使用覆盖该脚本的 Key") return end
         task.spawn(run, script)
+    end
+    currentView.refresh = function()
+        status.Text = statusMessage
+        local verified = token ~= nil and entitlement ~= nil
+        local editable = not verified and owner.alive
+        keyBox.Visible, loginButton.Visible, status.Visible = editable, editable, not verified
+        loginButton.Active, keyBox.TextEditable = editable and not loginBusy, editable and not loginBusy
+        loginButton.Text = loginBusy and "正在校验…" or "校验 Key"
+        authBadge.Text = not owner.alive and "已结束" or (verified and "已校验" or (loginBusy and "校验中" or "未校验"))
+        authBadge.TextColor3 = verified and Color3.fromRGB(115, 205, 166) or colors.muted
+        kindLabel.Visible, expiryLabel.Visible, expiryValue.Visible, grantNote.Visible = verified, verified, verified, verified
+        if verified then
+            kindLabel.Text = entitlement.kind == "MEMBER" and "全游戏会员" or "单游戏 · 30 天"
+            expiryValue.Text = Runtime.formatExpiry(entitlement.expiresAt)
+            grantNote.Text = entitlement.kind == "MEMBER" and "当前游戏及通用脚本\n关闭界面仍持续校验" or "仅限绑定游戏\n关闭界面仍持续校验"
+        end
+        operationStatus.Text = verified and statusMessage or "先完成 Key 校验，再选择脚本"
+        for _, card in ipairs(cards) do
+            local parts = cardParts[card]
+            local script = parts.script
+            parts.action.Text = not script.enabled and "待上架" or (scriptStarted and (activeScriptId == script.id and "运行中" or "重新进入后切换")
+                or (loading and loadingScriptId == script.id and "正在加载…" or (notGranted(script) and "需匹配权益" or (verified and "加载  →" or "校验后加载"))))
+            parts.action.TextColor3 = (not script.enabled or notGranted(script) or (scriptStarted and activeScriptId ~= script.id)) and colors.muted or colors.accent
+        end
     end
     local inputService = game:GetService("UserInputService")
     local dragInput, dragStart, dragOrigin, dragOffset, currentLayout = nil, nil, nil, Vector2.new(0, 0), nil
@@ -384,7 +437,7 @@ local function buildView(uiContext)
     connect(inputService.WindowFocusReleased, function() dragInput = nil end)
     local function fit()
         local size = viewport.AbsoluteSize
-        local layout = Runtime.layout(size.X, size.Y, #cards)
+        local layout = Runtime.layout(size.X, size.Y, currentSection.size, universalSection.size)
         currentLayout = layout
         panel.Size = UDim2.fromOffset(layout.width, layout.height)
         uiScale.Scale = layout.scale
@@ -395,32 +448,34 @@ local function buildView(uiContext)
         place(subtitle, pad + 50, 46, math.max(72, w - pad * 2 - 202), 20)
         place(closeButton, w - pad - 88, 18, 88, 44)
         place(collapseButton, w - pad - 140, 18, 44, 44)
-        local showSideNotes = not layout.compact
-        sideTitle.Visible, sideValue.Visible, sideNote.Visible = showSideNotes, showSideNotes, showSideNotes
-        if layout.compact then
-            place(authorization, pad, 80, 184, 196)
-            place(authTitle, 14, 10, 156, 20)
-            place(status, 14, 36, 156, 46)
-            place(keyBox, 14, 92, 156, 44)
-            place(loginButton, 14, 144, 156, 44)
-        else
-            place(sideTitle, pad, 88, 216, 20)
-            place(sideValue, pad, 116, 216, 44)
-            place(authorization, pad, 176, 216, 252)
-            place(authTitle, 14, 14, 188, 22)
-            place(status, 14, 48, 188, 78)
-            place(keyBox, 14, 142, 188, 44)
-            place(loginButton, 14, 194, 188, 44)
-            place(sideNote, pad, 448, 216, 60)
-        end
-        place(libraryTitle, layout.left, layout.mainTop, layout.mainWidth - 100, 26)
-        place(countLabel, layout.left + layout.mainWidth - 112, layout.mainTop + 4, 112, 20)
-        place(searchBox, layout.left, layout.mainTop + 38, layout.mainWidth - 200, 44)
-        place(allButton, layout.left + layout.mainWidth - 188, layout.mainTop + 38, 88, 44)
-        place(currentButton, layout.left + layout.mainWidth - 92, layout.mainTop + 38, 92, 44)
+        local inner = layout.compact and 156 or 188
+        local top = layout.compact and 10 or 14
+        place(authorization, pad, 80, inner + 28, layout.compact and 196 or 224)
+        place(authTitle, 14, top, inner - 58, 22)
+        place(authBadge, 14 + inner - 58, top + 2, 58, 20)
+        place(status, 14, layout.compact and 36 or 48, inner, layout.compact and 46 or 52)
+        place(keyBox, 14, layout.compact and 92 or 112, inner, 44)
+        place(loginButton, 14, layout.compact and 144 or 168, inner, 44)
+        place(kindLabel, 14, layout.compact and 44 or 50, inner, 24)
+        place(expiryLabel, 14, layout.compact and 78 or 90, inner, 18)
+        place(expiryValue, 14, layout.compact and 102 or 114, inner, 24)
+        place(grantNote, 14, layout.compact and 140 or 158, inner, 40)
+        place(libraryTitle, layout.left, layout.mainTop, layout.mainWidth - 112, 26)
+        place(countLabel, layout.left + layout.mainWidth - 100, layout.mainTop + 4, 100, 20)
+        place(operationStatus, layout.left, layout.mainTop + 30, layout.mainWidth, 28)
         place(list, layout.left, layout.gridTop, layout.mainWidth, layout.gridHeight)
-        grid.CellSize = UDim2.fromOffset(layout.cellWidth, layout.cardHeight)
-        grid.FillDirectionMaxCells = layout.columns
+        for index, section in ipairs({currentSection, universalSection}) do
+            local height = index == 1 and layout.currentHeight or layout.universalHeight
+            place(section.root, 0, index == 1 and 0 or layout.currentHeight + 16, layout.mainWidth - 4, height)
+            place(section.title, 0, 0, layout.mainWidth - 100, 22)
+            place(section.count, layout.mainWidth - 96, 2, 88, 20)
+            place(section.content, 0, 32, layout.mainWidth - 4, height - 32)
+            place(section.empty, 0, 32, layout.mainWidth - 8, 44)
+            section.grid.CellSize = UDim2.fromOffset(layout.cellWidth, layout.cardHeight)
+            section.grid.FillDirectionMaxCells = layout.columns
+            section.count.Text = tostring(section.size) .. " 个"
+            section.empty.Visible = section.size == 0
+        end
         for _,card in ipairs(cards) do
             local parts = cardParts[card]
             parts.title.Position = UDim2.fromOffset(14, layout.compact and 34 or 36)
@@ -432,15 +487,10 @@ local function buildView(uiContext)
         end
         list.CanvasSize = UDim2.fromOffset(0, layout.gridContentHeight)
         list.ScrollingEnabled = true
-        place(emptyLabel, layout.left, layout.gridTop + 14, layout.mainWidth, 80)
         place(footerNote, pad, layout.footerY + 4, w - pad * 2 - 124, 40)
         place(stopButton, layout.compact and pad or w - pad - 112, layout.footerY, layout.compact and 184 or 112, 44)
         footerNote.Visible = not layout.compact
         moveWindow(dragOffset)
-        allButton.BackgroundColor3 = onlyCurrent and colors.surface or colors.chip
-        currentButton.BackgroundColor3 = onlyCurrent and colors.chip or colors.surface
-        allButton.TextColor3 = onlyCurrent and colors.text or colors.accent
-        currentButton.TextColor3 = onlyCurrent and colors.accent or colors.text
     end
     connect(viewport:GetPropertyChangedSignal("AbsoluteSize"), fit)
     connect(collapseButton.Activated, function() dragInput = nil panel.Visible = false toggle.Visible = true end)
@@ -449,20 +499,23 @@ local function buildView(uiContext)
         for _, card in ipairs(cards) do card:Destroy() end
         table.clear(cards)
         table.clear(cardParts)
-        local found = Runtime.search(catalog, searchBox.Text, game.GameId, game.PlaceId)
+        currentSection.size, universalSection.size = 0, 0
+        local found = Runtime.search(catalog, "", game.GameId, game.PlaceId)
         for _, script in ipairs(found) do
             local rank = Runtime.rank(script, game.GameId, game.PlaceId)
-            if not onlyCurrent or rank == 0 or script.universal then
-                local category = rank == 0 and "当前游戏" or (script.universal and "通用脚本" or "其他游戏")
-                local available = script.enabled and (rank == 0 or script.universal)
+            local section = script.universal and universalSection or (rank == 0 and currentSection or nil)
+            if section then
+                section.size += 1
+                local category = script.universal and "通用脚本" or "当前游戏"
+                local available = script.enabled
                 local card = rounded(object("TextButton", {
-                    Name = "ScriptCard_" .. script.id, LayoutOrder = #cards + 1, Size = UDim2.fromOffset(260, 188),
+                    Name = "ScriptCard_" .. script.id, LayoutOrder = section.size, Size = UDim2.fromOffset(260, 188),
                     Text = script.nameZh, TextTransparency = 1, Selectable = available, AutoButtonColor = available,
                     BackgroundColor3 = colors.surface, BorderSizePixel = 0,
-                }, list), 12)
+                }, section.content), 12)
                 card.ClipsDescendants = true
                 outline(card)
-                if rank == 0 then
+                if not script.universal then
                     object("Frame", { Name = "CurrentRail", Position = UDim2.fromOffset(0, 12), Size = UDim2.fromOffset(3, 20), BackgroundColor3 = colors.accent, BorderSizePixel = 0 }, card)
                 end
                 local categoryLabel = text(card, "Category", category, 11, rank == 0 and colors.accent or colors.muted)
@@ -476,19 +529,16 @@ local function buildView(uiContext)
                 card.Activated:Connect(function()
                     requestScript(script)
                 end)
-                cardParts[card] = { title = title, scenario = scenario, action = action }
+                cardParts[card] = { title = title, scenario = scenario, action = action, script = script }
                 table.insert(cards, card)
             end
         end
         countLabel.Text = tostring(#cards) .. " 个脚本"
-        emptyLabel.Visible = #cards == 0
+        currentView.refresh()
         fit()
     end
-    connect(allButton.Activated, function() onlyCurrent = false list.CanvasPosition = Vector2.new(0, 0) render() end)
-    connect(currentButton.Activated, function() onlyCurrent = true list.CanvasPosition = Vector2.new(0, 0) render() end)
     connect(loginButton.Activated, function() task.spawn(login, keyBox.Text) end)
     connect(stopButton.Activated, function() endSession("你已结束本局，请重新进入游戏后使用 Hub") end)
-    connect(searchBox:GetPropertyChangedSignal("Text"), function() list.CanvasPosition = Vector2.new(0, 0) render() end)
     connect(closeButton.Activated, closeUI)
     connect(gui.Destroying, closeUI)
     currentView.render = render
@@ -511,7 +561,7 @@ mountUI = function()
         end
     elseif owner.alive and context.alive then
         view = currentView
-        view.status.Text = statusMessage
+        refreshView()
     else context.stop() end
 end
 
@@ -562,6 +612,10 @@ task.spawn(function()
                     local ok, deadline = pcall(Runtime.deadline, sent, data.remainingLeaseSeconds)
                     if ok and os.clock() < deadline then
                         leaseUntil = deadline
+                        if data.kind then
+                            entitlement = { kind = data.kind, gameId = data.gameId, expiresAt = data.entitlementExpiresAt }
+                            refreshView()
+                        end
                         renewed = true
                     end
                 elseif authorizationErrors[err] then
