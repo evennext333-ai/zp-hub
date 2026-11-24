@@ -255,7 +255,7 @@ local function buildView(uiContext)
     end
     local function text(parent, name, value, size, color)
         return object("TextLabel", {
-            Name = name, BackgroundTransparency = 1, Text = value, RichText = false,
+            Name = name, BackgroundTransparency = 1, BorderSizePixel = 0, Text = value, RichText = false,
             TextColor3 = color or colors.text, Font = Enum.Font.Gotham, TextSize = size or 14,
             TextWrapped = true, TextTruncate = Enum.TextTruncate.AtEnd,
             TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Top,

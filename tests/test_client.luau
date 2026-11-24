@@ -763,6 +763,54 @@ check("鼠标拖动、触控独占与窗口边界",function()
     f.close();f.inputService.InputChanged:Fire(touch)
     assert(f.counter.logins==0 and #f.counter.kicks==0,"拖动和关闭 UI 不影响授权")
 end)
+check("卡片填充控件不叠加默认边框",function()
+    local f=fixture({noKey=true})
+    for _,name in ipairs({"CardAction","KeyBadge","GameMatchBadge"}) do
+        local item=f.byName(name)
+        assert(item.BackgroundTransparency==0)
+        assert(item.BorderSizePixel==0,"自定义圆角控件应移除原生边框："..name)
+    end
+end)
+check("三端紧凑与标准卡片字段和加载区域不重叠",function()
+    local scripts={
+        {id="hall-7",gameId="demo",nameZh=string.rep("长标题",12),nameEn="Long title",enabled=true,requiresKey=true,placeIds={2},universeIds={},tags={},aliases={},scenario="场景字段"},
+        {id="hall-9",gameId="common",nameZh="通用工具",nameEn="Common",enabled=true,universal=true,requiresKey=false,placeIds={},universeIds={},tags={},aliases={},scenario="通用场景"},
+    }
+    local f=fixture({catalog=scripts,noKey=true})
+    for _,size in ipairs({{1040,720},{962,691},{900,580},{900,579},{899,629},{793,311},{627,297},{640,300}})do
+        f.resize(size[1],size[2])
+        local cell=f.byName("CurrentCardLayout").CellSize
+        local title,scenario,count,action=f.byName("ScriptName"),f.byName("Scenario"),f.byName("LoadCount"),f.byName("CardAction")
+        assert(title.Position.Y.Offset+title.Size.Y.Offset<=scenario.Position.Y.Offset)
+        assert(scenario.Position.Y.Offset+scenario.Size.Y.Offset<=count.Position.Y.Offset)
+        assert(count.Position.Y.Offset+count.Size.Y.Offset+4<=action.Position.Y.Offset)
+        assert(action.Position.Y.Offset+action.Size.Y.Offset<=cell.Y.Offset-8)
+        local actionWidth=action.Size.X.Scale*cell.X.Offset+action.Size.X.Offset
+        assert(action.Position.X.Offset>=8 and action.Position.X.Offset+actionWidth<=cell.X.Offset-8)
+        local list=f.byName("ScriptGrid")
+        assert(list.Size.Y.Offset>=24+cell.Y.Offset+4,"首排卡片及滚动区域内边距完整显示")
+        assert(list.Position.Y.Offset+list.Size.Y.Offset<=f.byName("HubWindow").Size.Y.Offset-8)
+        local footer=f.byName("FooterNote")
+        if footer.Visible then assert(list.Position.Y.Offset+list.Size.Y.Offset<=footer.Position.Y.Offset)end
+    end
+    assert(f.counter.logins==0 and f.counter.loads==0,"布局调整不发起授权或正文请求")
+end)
+check("加载 CTA 的校验和运行状态保留单次按需加载",function()
+    local f=fixture({noKey=true})
+    assert(f.byName("CardAction").Text=="🔑 校验后加载")
+    f.byName("ScriptCard_hall-7").Activated:Fire()
+    assert(f.counter.logins==0 and f.counter.loads==0 and f.find("请先校验 Key"))
+    f.env.HUB_KEY="RSH_"..string.rep("a",43)
+    f.client()
+    untilTrue(function()return f.byName("CardAction").Text=="▶ 点击加载"end)
+    f.byName("ScriptCard_hall-7").Activated:Fire()
+    untilTrue(function()return f.counter.starts==1 end)
+    assert(f.byName("CardAction").Text=="运行中")
+    assert(f.byName("CardAction").TextColor3==rb.Color3.fromRGB(115,205,166))
+    f.byName("ScriptCard_hall-7").Activated:Fire()
+    task.wait(0.02)
+    assert(f.counter.loads==1 and f.counter.starts==1 and f.counter.sources[1]==originalSource)
+end)
 check("ZS 品牌与 f0644b 主题色保持一致",function()
     local f=fixture()
     local accent=rb.Color3.fromRGB(240,100,75)
