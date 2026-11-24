@@ -30,6 +30,7 @@ local statusMessage = "正在获取正式目录…"
 local catalog = {}
 local loadCounts = {}
 local selectedGroupKey = "current"
+local currentMode = "detail" -- "detail" (游戏详情+脚本页) 或 "gallery" (全部游戏大画廊海报墙)
 local entitlement, activeScriptId, loadingScriptId = nil, nil, nil
 local errors = {
     HUB_KEY_INVALID = "Key 无效或已重置", HUB_LICENSE_REVOKED = "权益已吊销",
@@ -288,7 +289,7 @@ local function buildView(uiContext)
         Size = UDim2.new(0.94, 0, 0.9, -40), BackgroundTransparency = 1, BorderSizePixel = 0,
     }, gui)
     object("UISizeConstraint", { MaxSize = Vector2.new(1040, 720) }, viewport)
-    -- The workspace stays horizontal; only the card grid and game nav scroll.
+    -- The workspace stays horizontal; main stage switches between Current/Game Detail and All Games Gallery.
     local panel = rounded(object("Frame", {
         Name = "HubWindow", AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
         Size = UDim2.fromOffset(700, 340), BackgroundColor3 = colors.canvas, BorderSizePixel = 0,
@@ -300,13 +301,13 @@ local function buildView(uiContext)
         Font = Enum.Font.GothamBold, TextSize = 17, TextColor3 = colors.ink, BorderSizePixel = 0 }, panel), 10)
     local heading = text(panel, "Heading", "ZS HUB", 21)
     heading.Font = Enum.Font.GothamBold
-    local subtitle = text(panel, "Subtitle", "拖动标题栏移动窗口 · 选择游戏查看详情与脚本", 12, colors.muted)
+    local subtitle = text(panel, "Subtitle", "拖动标题栏移动窗口 · 浏览全部支持游戏与脚本", 12, colors.muted)
     local dragHandle = object("Frame", { Name = "DragHandle", BackgroundTransparency = 1,
         Active = true, Selectable = false, BorderSizePixel = 0, ZIndex = 8 }, panel)
     local closeButton = button(panel, "CloseView", "关闭界面")
     local collapseButton = button(panel, "CollapseView", "收起")
 
-    -- 左侧：授权卡片 + 支持的游戏总列表导航
+    -- 左侧栏：清爽的访问授权卡片
     local authorization = rounded(object("Frame", { Name = "Authorization", BackgroundColor3 = colors.surface, BorderSizePixel = 0 }, panel), 12)
     outline(authorization)
     local authTitle = text(authorization, "AuthTitle", "访问授权", 13)
@@ -323,18 +324,24 @@ local function buildView(uiContext)
     local expiryValue = text(authorization, "ExpiryValue", "", 13)
     local grantNote = text(authorization, "GrantNote", "", 11, colors.muted)
 
-    local navHeading = text(panel, "GameNavHeading", "支持的游戏", 12, colors.muted)
-    navHeading.Font = Enum.Font.GothamMedium
+    -- 右侧主舞台顶部导航栏：当前游戏 Tab | 全部支持游戏 (N款) Tab + 全局搜索框
+    local tabCurrentBtn = rounded(object("TextButton", {
+        Name = "TabCurrentGame", BackgroundColor3 = colors.accent, TextColor3 = colors.ink,
+        Font = Enum.Font.GothamBold, TextSize = 13, TextScaled = false, Text = "当前游戏",
+        Selectable = true, AutoButtonColor = true, BorderSizePixel = 0,
+    }, panel), 9)
+    local tabCurrentStroke = outline(tabCurrentBtn, colors.accent)
+    local tabAllGamesBtn = rounded(object("TextButton", {
+        Name = "TabAllGames", BackgroundColor3 = colors.surface, TextColor3 = colors.text,
+        Font = Enum.Font.GothamBold, TextSize = 13, TextScaled = false, Text = "全部支持游戏",
+        Selectable = true, AutoButtonColor = true, BorderSizePixel = 0,
+    }, panel), 9)
+    local tabAllGamesStroke = outline(tabAllGamesBtn, colors.border)
     local navCountLabel = text(panel, "GameNavCount", "1 款", 11, colors.muted)
-    navCountLabel.TextXAlignment = Enum.TextXAlignment.Right
-    local gameNavList = object("ScrollingFrame", {
-        Name = "GameNavList", BackgroundTransparency = 1, BorderSizePixel = 0,
-        ScrollBarThickness = 2, ScrollBarImageColor3 = colors.border,
-        ScrollingDirection = Enum.ScrollingDirection.Y, AutomaticCanvasSize = Enum.AutomaticSize.None,
-        CanvasSize = UDim2.new(), ClipsDescendants = true,
-    }, panel)
+    navCountLabel.Visible = false
+    local gameSearchBox = input(panel, "GameSearchInput", "搜索游戏或脚本名称…")
 
-    -- 右侧顶部：所选游戏的详情横幅卡片
+    -- 右侧视图 1：所选游戏的详情横幅卡片 + 脚本三列网格
     local gameDetailCard = rounded(object("Frame", { Name = "GameDetailCard", BackgroundColor3 = colors.surface, BorderSizePixel = 0 }, panel), 12)
     outline(gameDetailCard)
     local libraryTitle = text(panel, "LibraryTitle", "当前游戏", 16)
@@ -347,6 +354,12 @@ local function buildView(uiContext)
     gameMatchBadge.BackgroundColor3 = colors.surfaceElevated
     gameMatchBadge.TextXAlignment = Enum.TextXAlignment.Center
     gameMatchBadge.TextYAlignment = Enum.TextYAlignment.Center
+    local backToGalleryBtn = rounded(object("TextButton", {
+        Name = "BackToGallery", BackgroundColor3 = colors.surfaceElevated, TextColor3 = colors.accent,
+        Font = Enum.Font.GothamMedium, TextSize = 11, TextScaled = false, Text = "← 全部游戏",
+        Selectable = true, AutoButtonColor = true, BorderSizePixel = 0, Visible = false, ZIndex = 5,
+    }, panel), 6)
+    outline(backToGalleryBtn, colors.accent)
     local gamePlaceholder = rounded(text(panel, "CurrentGamePlaceholder", "游戏", 12, colors.muted), 9)
     gamePlaceholder.BackgroundTransparency, gamePlaceholder.BackgroundColor3 = 0, colors.surfaceElevated
     gamePlaceholder.TextXAlignment, gamePlaceholder.TextYAlignment = Enum.TextXAlignment.Center, Enum.TextYAlignment.Center
@@ -357,7 +370,6 @@ local function buildView(uiContext)
     local countLabel = text(panel, "ScriptCount", "正在同步目录", 12, colors.muted)
     countLabel.TextXAlignment = Enum.TextXAlignment.Right
 
-    -- 右侧主体：脚本卡片网格滚动区
     local list = object("ScrollingFrame", {
         Name = "ScriptGrid", BackgroundTransparency = 1, BorderSizePixel = 0,
         ScrollBarThickness = 3, ScrollBarImageColor3 = colors.border,
@@ -380,6 +392,26 @@ local function buildView(uiContext)
     end
     local currentSection = section("Current", "当前游戏", "当前游戏暂无适配脚本")
     local universalSection = section("Universal", "通用脚本", "暂无通用脚本")
+
+    -- 右侧视图 2：全部支持游戏大画廊（3列大图标海报卡片墙）
+    local gameNavList = object("ScrollingFrame", {
+        Name = "GameNavList", BackgroundTransparency = 1, BorderSizePixel = 0,
+        ScrollBarThickness = 3, ScrollBarImageColor3 = colors.border,
+        ScrollingDirection = Enum.ScrollingDirection.Y, AutomaticCanvasSize = Enum.AutomaticSize.None,
+        CanvasSize = UDim2.new(), ClipsDescendants = true, Visible = false,
+    }, panel)
+    object("UIPadding", { PaddingLeft = UDim.new(0, 2), PaddingRight = UDim.new(0, 2), PaddingTop = UDim.new(0, 2), PaddingBottom = UDim.new(0, 2) }, gameNavList)
+    local gameCardsContainer = object("Frame", {
+        Name = "GameCardsContainer", BackgroundTransparency = 1, BorderSizePixel = 0,
+    }, gameNavList)
+    local gameGalleryGrid = object("UIGridLayout", {
+        Name = "GameGalleryLayout", CellPadding = UDim2.fromOffset(12, 12),
+        FillDirection = Enum.FillDirection.Horizontal, HorizontalAlignment = Enum.HorizontalAlignment.Left,
+        SortOrder = Enum.SortOrder.LayoutOrder,
+    }, gameCardsContainer)
+    local gameNavEmpty = text(gameNavList, "GameNavEmpty", "未找到匹配的游戏，请尝试其他搜索关键词", 13, colors.muted)
+    gameNavEmpty.Visible = false
+
     local footerNote = text(panel, "FooterNote", "原脚本独立加载 · 授权在后台持续校验", 12, colors.muted)
     local stopButton = button(panel, "EndSession", "结束本局")
     stopButton.TextColor3 = colors.danger
@@ -407,6 +439,7 @@ local function buildView(uiContext)
     local cards, cardParts = {}, {}
     local navButtons, navParts = {}, {}
     local groups, activeGroup = {}, nil
+    local lastViewportW, lastViewportH = 1040, 720
     local currentView = { context = uiContext, status = status, keyBox = keyBox }
     local function closeUI()
         if view == currentView then view = nil end
@@ -474,7 +507,6 @@ local function buildView(uiContext)
         expiryValue.Text = Runtime.remaining(seconds)
     end
     local fit
-    local lastVerifiedState = nil
     connect(gameImage:GetPropertyChangedSignal("IsLoaded"), function() gamePlaceholder.Visible = not gameImage.IsLoaded end)
     currentView.refresh = function()
         status.Text = statusMessage
@@ -489,17 +521,33 @@ local function buildView(uiContext)
         if verified then
             kindLabel.Text = entitlement.kind == "MEMBER" and "全游戏会员" or "单游戏 · 30 天"
             updateRemaining()
-            grantNote.Text = entitlement.kind == "MEMBER" and "当前游戏及通用脚本" or "仅限绑定游戏"
+            grantNote.Text = entitlement.kind == "MEMBER" and "当前游戏及通用脚本\n关闭界面仍持续校验" or "仅限绑定游戏\n关闭界面仍持续校验"
         end
-        if lastVerifiedState ~= nil and lastVerifiedState ~= verified and fit then
-            lastVerifiedState = verified
-            fit()
-        else
-            lastVerifiedState = verified
-        end
+        local inGallery = currentMode == "gallery"
+        local isCurrentActive = not inGallery and activeGroup and activeGroup.isCurrent
+        tabCurrentBtn.BackgroundColor3 = isCurrentActive and colors.accent or colors.surface
+        tabCurrentBtn.TextColor3 = isCurrentActive and colors.ink or colors.text
+        tabCurrentStroke.Color = isCurrentActive and colors.accent or colors.border
+        local allTabActive = inGallery or (activeGroup and not activeGroup.isCurrent)
+        tabAllGamesBtn.BackgroundColor3 = allTabActive and colors.accent or colors.surface
+        tabAllGamesBtn.TextColor3 = allTabActive and colors.ink or colors.text
+        tabAllGamesStroke.Color = allTabActive and colors.accent or colors.border
+
+        gameDetailCard.Visible = not inGallery
+        libraryTitle.Visible = not inGallery
+        gameNameEn.Visible = not inGallery
+        gameMatchBadge.Visible = not inGallery
+        gameImage.Visible = not inGallery
+        gamePlaceholder.Visible = not inGallery and not gameImage.IsLoaded
+        operationStatus.Visible = not inGallery
+        countLabel.Visible = not inGallery
+        list.Visible = not inGallery
+        backToGalleryBtn.Visible = not inGallery and (activeGroup ~= nil and not activeGroup.isCurrent)
+        gameNavList.Visible = inGallery
+
         local viewingOther = activeGroup and not activeGroup.isCurrent
         if viewingOther then
-            operationStatus.Text = "当前正在预览其他游戏详情，非当前游戏脚本已置灰，需进入对应游戏后加载"
+            operationStatus.Text = "非当前游戏脚本已置灰，请进入对应游戏后加载"
         else
             operationStatus.Text = verified and statusMessage or "先完成 Key 校验，再选择脚本"
         end
@@ -507,9 +555,9 @@ local function buildView(uiContext)
             local np = navParts[navBtn]
             local selected = activeGroup and np.group.key == activeGroup.key
             navBtn.BackgroundColor3 = selected and colors.surfaceElevated or colors.surface
-            np.stroke.Color = selected and colors.accent or colors.border
-            np.bar.Visible = selected
-            np.title.TextColor3 = selected and colors.text or (np.group.isCurrent and colors.text or colors.muted)
+            np.stroke.Color = np.group.isCurrent and colors.accent or (selected and colors.accent or colors.border)
+            np.bar.Visible = np.group.isCurrent or selected
+            np.title.TextColor3 = colors.text
             np.badge.TextColor3 = np.group.isCurrent and colors.accent or colors.muted
         end
         for _, card in ipairs(cards) do
@@ -561,8 +609,14 @@ local function buildView(uiContext)
     connect(inputService.WindowFocusReleased, function() dragInput = nil end)
     fit = function()
         local size = viewport.AbsoluteSize
+        if size and size.X >= 100 and size.Y >= 100 then
+            lastViewportW, lastViewportH = size.X, size.Y
+        elseif gui.AbsoluteSize and gui.AbsoluteSize.X >= 100 and gui.AbsoluteSize.Y >= 100 then
+            lastViewportW = math.min(1040, gui.AbsoluteSize.X * 0.94)
+            lastViewportH = math.min(720, gui.AbsoluteSize.Y * 0.9 - 40)
+        end
         local showUniversal = not activeGroup or activeGroup.isCurrent
-        local layout = Runtime.layout(size.X, size.Y, currentSection.size, universalSection.size, #navButtons, showUniversal)
+        local layout = Runtime.layout(lastViewportW, lastViewportH, currentSection.size, universalSection.size, #navButtons, showUniversal)
         currentLayout = layout
         panel.Size = UDim2.fromOffset(layout.width, layout.height)
         uiScale.Scale = layout.scale
@@ -573,53 +627,48 @@ local function buildView(uiContext)
         place(subtitle, pad + 50, 40, math.max(72, w - pad * 2 - 202), 18)
         place(closeButton, w - pad - 88, 16, 88, 44)
         place(collapseButton, w - pad - 140, 16, 44, 44)
+
+        -- 左侧授权卡片（干净充裕的独立侧栏）
         local sidebarWidth = layout.left - pad - 12
         local inner = sidebarWidth - 24
         local authTop = layout.mainTop
-        local verified = token ~= nil and entitlement ~= nil
-        local authHeight = verified and (layout.compact and 112 or 132) or (layout.compact and 154 or 164)
+        local authHeight = layout.compact and 196 or 224
         place(authorization, pad, authTop, sidebarWidth, authHeight)
-        place(authTitle, 12, 8, inner - 54, 18)
-        place(authBadge, 12 + inner - 54, 8, 54, 18)
-        place(status, 12, 28, inner, 28)
-        place(keyBox, 12, layout.compact and 60 or 62, inner, 44)
-        place(loginButton, 12, layout.compact and 106 or 110, inner, 44)
-        place(kindLabel, 12, 28, inner, 18)
-        place(expiryLabel, 12, layout.compact and 48 or 54, inner, 16)
-        place(expiryValue, 12, layout.compact and 66 or 72, inner, 18)
-        place(grantNote, 12, layout.compact and 86 or 96, inner, 24)
+        place(authTitle, 12, 12, inner - 54, 20)
+        place(authBadge, 12 + inner - 54, 12, 54, 20)
+        place(status, 12, layout.compact and 36 or 44, inner, layout.compact and 44 or 48)
+        place(keyBox, 12, layout.compact and 88 or 104, inner, 44)
+        place(loginButton, 12, layout.compact and 140 or 160, inner, 44)
+        place(kindLabel, 12, layout.compact and 44 or 50, inner, 24)
+        place(expiryLabel, 12, layout.compact and 78 or 90, inner, 18)
+        place(expiryValue, 12, layout.compact and 102 or 114, inner, 24)
+        place(grantNote, 12, layout.compact and 140 or 158, inner, 40)
 
-        -- 左侧下方：支持的游戏总列表
-        local navTop = authTop + authHeight + 8
-        place(navHeading, pad, navTop, sidebarWidth - 52, 18)
-        place(navCountLabel, pad + sidebarWidth - 50, navTop, 50, 18)
-        local navListTop = navTop + 20
-        local navListBottom = layout.height - 12
-        local navListHeight = math.max(54, navListBottom - navListTop)
-        place(gameNavList, pad, navListTop, sidebarWidth, navListHeight)
-        for idx, navBtn in ipairs(navButtons) do
-            local np = navParts[navBtn]
-            local y = (idx - 1) * (layout.navItemHeight + layout.navGap)
-            place(navBtn, 0, y, sidebarWidth - 4, layout.navItemHeight)
-            place(np.bar, 0, 8, 3, layout.navItemHeight - 16)
-            place(np.title, 10, 6, sidebarWidth - 62, 18)
-            place(np.sub, 10, 24, sidebarWidth - 62, 14)
-            place(np.badge, sidebarWidth - 52, 6, 42, 18)
+        -- 右侧主舞台顶部：当前游戏 Tab | 全部支持游戏 Tab | 全局搜索框
+        local tab1W = layout.compact and 92 or 104
+        local tab2W = layout.compact and 146 or 164
+        place(tabCurrentBtn, layout.left, layout.mainTop, tab1W, layout.navBarHeight)
+        place(tabAllGamesBtn, layout.left + tab1W + 8, layout.mainTop, tab2W, layout.navBarHeight)
+        local searchLeft = layout.left + tab1W + tab2W + 16
+        local searchW = math.max(120, layout.left + layout.mainWidth - searchLeft)
+        place(gameSearchBox, searchLeft, layout.mainTop, searchW, layout.navBarHeight)
+
+        -- 右侧视图 1：游戏详情横幅卡片
+        local dTop = layout.detailTop
+        place(gameDetailCard, layout.left, dTop, layout.mainWidth, layout.detailHeight)
+        place(gamePlaceholder, layout.left + 12, dTop + 10, 44, 44)
+        place(gameImage, layout.left + 12, dTop + 10, 44, 44)
+        local rightActionsW = (activeGroup and not activeGroup.isCurrent) and 230 or 154
+        place(libraryTitle, layout.left + 66, dTop + 6, math.max(80, layout.mainWidth - 66 - rightActionsW), 20)
+        if activeGroup and not activeGroup.isCurrent then
+            place(backToGalleryBtn, layout.left + layout.mainWidth - 224, dTop + 7, 72, 22)
         end
-        gameNavList.CanvasSize = UDim2.fromOffset(0, layout.navContentHeight)
-        gameNavList.ScrollingEnabled = true
+        place(gameMatchBadge, layout.left + layout.mainWidth - 146, dTop + 7, 64, 20)
+        place(countLabel, layout.left + layout.mainWidth - 78, dTop + 8, 66, 20)
+        place(gameNameEn, layout.left + 66, dTop + 26, layout.mainWidth - 78, 16)
+        place(operationStatus, layout.left + 66, dTop + 42, layout.mainWidth - 78, 16)
 
-        -- 右侧顶部：游戏详情卡片
-        place(gameDetailCard, layout.left, layout.mainTop, layout.mainWidth, layout.detailHeight)
-        place(gamePlaceholder, layout.left + 12, layout.mainTop + 12, 44, 44)
-        place(gameImage, layout.left + 12, layout.mainTop + 12, 44, 44)
-        place(libraryTitle, layout.left + 66, layout.mainTop + 10, layout.mainWidth - 224, 22)
-        place(gameMatchBadge, layout.left + layout.mainWidth - 154, layout.mainTop + 11, 68, 20)
-        place(countLabel, layout.left + layout.mainWidth - 82, layout.mainTop + 12, 70, 20)
-        place(gameNameEn, layout.left + 66, layout.mainTop + 33, layout.mainWidth - 78, 16)
-        place(operationStatus, layout.left + 66, layout.mainTop + 50, layout.mainWidth - 78, 16)
-
-        -- 右侧脚本网格区
+        -- 右侧视图 1：脚本三列网格区
         place(list, layout.left, layout.gridTop, layout.mainWidth, layout.gridHeight)
         universalSection.root.Visible = showUniversal
         for index, sec in ipairs({currentSection, universalSection}) do
@@ -641,14 +690,40 @@ local function buildView(uiContext)
             parts.scenario.Position = UDim2.fromOffset(14, layout.compact and 68 or 74)
             parts.scenario.Size = UDim2.new(1, -28, 0, 28)
             parts.loadCount.Position = UDim2.fromOffset(14, layout.cardHeight - 32)
-            parts.loadCount.Size = UDim2.new(0.52, -14, 0, 22)
-            parts.action.Position = UDim2.fromOffset(14, layout.cardHeight - 32)
-            parts.action.Size = UDim2.new(1, -28, 0, 22)
+            parts.loadCount.Size = UDim2.new(0.5, -16, 0, 22)
+            parts.action.Position = UDim2.new(0.5, 2, 0, layout.cardHeight - 32)
+            parts.action.Size = UDim2.new(0.5, -16, 0, 22)
         end
         list.CanvasSize = UDim2.fromOffset(0, layout.gridContentHeight)
         list.ScrollingEnabled = true
+
+        -- 右侧视图 2：全部支持游戏 3 列大画廊（海报墙）
+        place(gameNavList, layout.left, layout.galleryTop, layout.mainWidth, layout.galleryHeight)
+        place(gameCardsContainer, 0, 0, layout.mainWidth - 4, layout.galleryContentHeight)
+        gameGalleryGrid.CellSize = UDim2.fromOffset(layout.cellWidth, layout.gameCardHeight)
+        gameGalleryGrid.FillDirectionMaxCells = layout.columns
+        place(gameNavEmpty, 12, 16, layout.mainWidth - 24, 32)
+        gameNavEmpty.Visible = #navButtons == 0
+        local iconSize = layout.compact and 50 or 58
+        for _, navBtn in ipairs(navButtons) do
+            local np = navParts[navBtn]
+            place(np.bar, 0, 12, 3, layout.gameCardHeight - 24)
+            place(np.iconPlaceholder, 12, 12, iconSize, iconSize)
+            place(np.icon, 12, 12, iconSize, iconSize)
+            local textLeft = 12 + iconSize + 10
+            local textW = math.max(50, layout.cellWidth - textLeft - 10)
+            place(np.badge, textLeft, 10, textW, 16)
+            place(np.title, textLeft, 28, textW, 20)
+            place(np.nameEn, textLeft, 48, textW, 16)
+            local sW = math.floor((layout.cellWidth - 24) * 0.54)
+            place(np.sub, 12, layout.gameCardHeight - 28, sW, 18)
+            place(np.enterLabel, 12 + sW, layout.gameCardHeight - 28, layout.cellWidth - 24 - sW, 18)
+        end
+        gameNavList.CanvasSize = UDim2.fromOffset(0, layout.galleryContentHeight)
+        gameNavList.ScrollingEnabled = true
+
         place(footerNote, layout.left, layout.footerY + 6, layout.mainWidth - 124, 36)
-        place(stopButton, w - pad - 112, layout.footerY, 112, 44)
+        place(stopButton, layout.compact and pad or w - pad - 112, layout.footerY, layout.compact and sidebarWidth or 112, 44)
         footerNote.Visible = not layout.compact
         moveWindow(dragOffset)
     end
@@ -656,7 +731,7 @@ local function buildView(uiContext)
     bindClick(collapseButton, function() dragInput = nil panel.Visible = false toggle.Visible = true end)
     bindClick(toggle, function() panel.Visible = true toggle.Visible = false end)
 
-    local renderGroup
+    local renderGroup, renderNav
     local function createCard(script, sec, playableHere)
         sec.size += 1
         local category = script.universal and "通用脚本" or (playableHere and "当前游戏" or "其他游戏")
@@ -692,20 +767,34 @@ local function buildView(uiContext)
         table.insert(cards, card)
     end
 
-    renderGroup = function(group)
+    renderGroup = function(group, stayInMode)
         activeGroup = group
         selectedGroupKey = group.key
+        if not stayInMode then
+            currentMode = "detail"
+        end
         for _, card in ipairs(cards) do card:Destroy() end
         table.clear(cards)
         table.clear(cardParts)
         currentSection.size, universalSection.size = 0, 0
+        local queryText = type(gameSearchBox.Text) == "string" and gameSearchBox.Text:match("^%s*(.-)%s*$") or ""
+        local groupSelfMatches = queryText ~= "" and (
+            string.find(string.lower(group.nameZh or ""), string.lower(queryText), 1, true) ~= nil
+            or string.find(string.lower(group.nameEn or ""), string.lower(queryText), 1, true) ~= nil
+            or string.find(string.lower(tostring(group.gameId or "")), string.lower(queryText), 1, true) ~= nil
+        )
         if group.isCurrent then
             currentSection.title.Text = "当前游戏脚本"
-            currentSection.empty.Text = "当前游戏暂无适配脚本"
-            for _, script in ipairs(group.scripts) do
+            currentSection.empty.Text = queryText ~= "" and "没有匹配的当前游戏脚本" or "当前游戏暂无适配脚本"
+            universalSection.empty.Text = queryText ~= "" and "没有匹配的通用脚本" or "暂无通用脚本"
+            local curList = queryText ~= "" and Runtime.search(group.scripts, queryText, game.GameId, game.PlaceId) or group.scripts
+            local displayCur = (queryText == "" or #curList > 0 or not groupSelfMatches) and curList or group.scripts
+            for _, script in ipairs(displayCur) do
                 createCard(script, currentSection, true)
             end
-            for _, script in ipairs(group.universalScripts or {}) do
+            local uniRaw = group.universalScripts or {}
+            local uniList = queryText ~= "" and Runtime.search(uniRaw, queryText, game.GameId, game.PlaceId) or uniRaw
+            for _, script in ipairs(uniList) do
                 createCard(script, universalSection, true)
             end
             countLabel.Text = tostring(#cards) .. " 个脚本"
@@ -713,8 +802,10 @@ local function buildView(uiContext)
             gameMatchBadge.TextColor3 = colors.accent
         else
             currentSection.title.Text = "支持脚本（非当前游戏 · 仅预览）"
-            currentSection.empty.Text = "该游戏暂无脚本"
-            for _, script in ipairs(group.scripts) do
+            currentSection.empty.Text = queryText ~= "" and "没有匹配的脚本" or "该游戏暂无脚本"
+            local matched = queryText ~= "" and Runtime.search(group.scripts, queryText, game.GameId, game.PlaceId) or group.scripts
+            local displayList = (queryText == "" or #matched > 0 or not groupSelfMatches) and matched or group.scripts
+            for _, script in ipairs(displayList) do
                 createCard(script, currentSection, false)
             end
             countLabel.Text = tostring(#cards) .. " 个脚本"
@@ -730,41 +821,94 @@ local function buildView(uiContext)
         fit()
     end
 
-    local function render()
+    renderNav = function()
         for _, btn in ipairs(navButtons) do btn:Destroy() end
         table.clear(navButtons)
         table.clear(navParts)
-        local currentEntry
-        groups, currentEntry = Runtime.gameGroups(catalog, game.GameId, game.PlaceId)
-        navCountLabel.Text = tostring(#groups) .. " 款"
-        local targetGroup = currentEntry
+        local currentEntry, totalGames
+        groups, currentEntry, totalGames = Runtime.gameGroups(catalog, game.GameId, game.PlaceId, gameSearchBox.Text)
+        local totalCount = totalGames or #groups
+        navCountLabel.Text = tostring(totalCount) .. " 款"
+        tabAllGamesBtn.Text = "全部游戏 (" .. tostring(totalCount) .. ")"
+        local targetGroup = nil
         for idx, grp in ipairs(groups) do
             if grp.key == selectedGroupKey then targetGroup = grp end
             local navName = grp.isCurrent and "GameNav_current" or ("GameNav_" .. tostring(grp.gameId))
             local btn = rounded(object("TextButton", {
-                Name = navName, LayoutOrder = idx, Text = grp.nameZh, TextTransparency = 1,
+                Name = navName, LayoutOrder = idx, Size = UDim2.fromOffset(220, 112),
+                Text = grp.nameZh, TextTransparency = 1, ClipsDescendants = true,
                 BackgroundColor3 = colors.surface, BorderSizePixel = 0, Selectable = true, AutoButtonColor = true,
-            }, gameNavList), 9)
+            }, gameCardsContainer), 12)
             local stroke = outline(btn)
             local bar = rounded(object("Frame", {
-                Name = "ActiveBar", BackgroundColor3 = colors.accent, BorderSizePixel = 0, Visible = false,
+                Name = "ActiveBar", BackgroundColor3 = colors.accent, BorderSizePixel = 0, Visible = grp.isCurrent,
             }, btn), 2)
-            local tLabel = text(btn, "NavTitle", grp.nameZh, 13, colors.text)
-            tLabel.Font = Enum.Font.GothamMedium
-            tLabel.TextWrapped = false
-            local scriptTotal = #grp.scripts + (grp.universalScripts and #grp.universalScripts or 0)
-            local sLabel = text(btn, "NavSub", (grp.isCurrent and "当前所在 · " or "点击查看 · ") .. tostring(scriptTotal) .. " 个脚本", 11, colors.muted)
-            sLabel.TextWrapped = false
-            local bLabel = text(btn, "NavBadge", grp.isCurrent and "当前" or "预览", 11, grp.isCurrent and colors.accent or colors.muted)
-            bLabel.TextXAlignment = Enum.TextXAlignment.Right
-            bindClick(btn, function()
-                renderGroup(grp)
+            local iconPh = rounded(text(btn, "NavIconPlaceholder", "游戏", 12, colors.muted), 9)
+            iconPh.BackgroundTransparency, iconPh.BackgroundColor3 = 0, colors.surfaceElevated
+            iconPh.TextXAlignment, iconPh.TextYAlignment = Enum.TextXAlignment.Center, Enum.TextYAlignment.Center
+            local navUId = grp.universeId or (grp.isCurrent and game.GameId or 0)
+            local navIconUri = (type(navUId) == "number" and navUId > 0) and ("rbxthumb://type=GameIcon&id=" .. tostring(navUId) .. "&w=150&h=150") or ""
+            local navIcon = rounded(object("ImageLabel", {
+                Name = "NavIcon", BackgroundTransparency = 1, BorderSizePixel = 0,
+                ScaleType = Enum.ScaleType.Fit, Image = navIconUri, ZIndex = 3,
+            }, btn), 9)
+            navIcon:GetPropertyChangedSignal("IsLoaded"):Connect(function()
+                iconPh.Visible = not navIcon.IsLoaded
             end)
-            navParts[btn] = { group = grp, stroke = stroke, bar = bar, title = tLabel, sub = sLabel, badge = bLabel }
+            iconPh.Visible = not navIcon.IsLoaded
+            local bLabel = text(btn, "NavBadge", grp.isCurrent and "● 当前游戏" or "支持游戏", 11, grp.isCurrent and colors.accent or colors.muted)
+            bLabel.Font = Enum.Font.GothamMedium
+            bLabel.TextWrapped = false
+            local tLabel = text(btn, "NavTitle", grp.nameZh, 14, colors.text)
+            tLabel.Font = Enum.Font.GothamBold
+            tLabel.TextWrapped = false
+            local enLabel = text(btn, "NavNameEn", grp.nameEn or "", 11, colors.muted)
+            enLabel.TextWrapped = false
+            local scriptTotal = #grp.scripts + (grp.universalScripts and #grp.universalScripts or 0)
+            local sLabel = text(btn, "NavSub", tostring(scriptTotal) .. " 个支持脚本", 11, colors.muted)
+            sLabel.TextWrapped = false
+            local enterLabel = text(btn, "NavEnter", grp.isCurrent and "进入脚本 →" or "查看详情 →", 11, grp.isCurrent and colors.accent or colors.muted)
+            enterLabel.TextXAlignment = Enum.TextXAlignment.Right
+            enterLabel.TextWrapped = false
+            bindClick(btn, function()
+                renderGroup(grp, false)
+            end)
+            navParts[btn] = {
+                group = grp, stroke = stroke, bar = bar, icon = navIcon, iconPlaceholder = iconPh,
+                title = tLabel, nameEn = enLabel, sub = sLabel, badge = bLabel, enterLabel = enterLabel,
+            }
             table.insert(navButtons, btn)
         end
-        renderGroup(targetGroup)
+        if not targetGroup then
+            for _, grp in ipairs({currentEntry}) do
+                if grp.key == selectedGroupKey then targetGroup = grp end
+            end
+            if not targetGroup and activeGroup and not activeGroup.isCurrent then
+                local allGroups = Runtime.gameGroups(catalog, game.GameId, game.PlaceId, "")
+                for _, grp in ipairs(allGroups) do
+                    if grp.key == selectedGroupKey then targetGroup = grp end
+                end
+            end
+            targetGroup = targetGroup or currentEntry
+        end
+        renderGroup(targetGroup, true)
     end
+
+    bindClick(tabCurrentBtn, function()
+        local _, currentEntry = Runtime.gameGroups(catalog, game.GameId, game.PlaceId, "")
+        renderGroup(currentEntry, false)
+    end)
+    bindClick(tabAllGamesBtn, function()
+        currentMode = "gallery"
+        currentView.refresh()
+        fit()
+    end)
+    bindClick(backToGalleryBtn, function()
+        currentMode = "gallery"
+        currentView.refresh()
+        fit()
+    end)
+    connect(gameSearchBox:GetPropertyChangedSignal("Text"), renderNav)
     if keyBox.FocusLost then
         connect(keyBox.FocusLost, function(enterPressed)
             if enterPressed and loginButton.Active then
@@ -779,8 +923,8 @@ local function buildView(uiContext)
     bindClick(stopButton, function() endSession("你已结束本局，请重新进入游戏后使用 Hub") end)
     bindClick(closeButton, closeUI)
     connect(gui.Destroying, closeUI)
-    currentView.render = render
-    render()
+    currentView.render = renderNav
+    renderNav()
     local remainingTask = task.spawn(function()
         while uiContext.alive do
             local ok = pcall(updateRemaining)

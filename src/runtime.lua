@@ -72,8 +72,8 @@ function Runtime.loadCountText(count)
     return "已执行 " .. tostring(n) .. " 次"
 end
 
--- 提取支持的游戏总列表，以及当前游戏的专属与通用脚本分组
-function Runtime.gameGroups(scripts, universeId, placeId)
+-- 提取支持的游戏总列表（可按关键字搜索过滤），以及当前游戏的专属与通用脚本分组
+function Runtime.gameGroups(scripts, universeId, placeId, query)
     local currentGame = Runtime.currentGame(scripts, universeId, placeId)
     local currentGid = currentGame and currentGame.id or nil
     local currentScripts, universalScripts = {}, {}
@@ -94,23 +94,25 @@ function Runtime.gameGroups(scripts, universeId, placeId)
         local rank = Runtime.rank(script, universeId, placeId)
         if not script.universal and rank > 0 then
             local gid = tostring(script.gameId or (type(script.game) == "table" and script.game.id) or "other")
-            local group = byGame[gid]
-            if not group then
-                local g = type(script.game) == "table" and script.game or {}
-                local uId = type(script.universeIds) == "table" and tonumber(script.universeIds[1]) or nil
-                group = {
-                    key = "game:" .. gid,
-                    gameId = gid,
-                    nameZh = (type(g.nameZh) == "string" and g.nameZh ~= "" and g.nameZh) or gid,
-                    nameEn = (type(g.nameEn) == "string" and g.nameEn ~= "" and g.nameEn) or "英文名称未配置",
-                    universeId = uId,
-                    isCurrent = false,
-                    scripts = {},
-                }
-                byGame[gid] = group
-                table.insert(order, group)
+            if not (currentGid and gid == currentGid and rank == 1) then
+                local group = byGame[gid]
+                if not group then
+                    local g = type(script.game) == "table" and script.game or {}
+                    local uId = type(script.universeIds) == "table" and tonumber(script.universeIds[1]) or nil
+                    group = {
+                        key = "game:" .. gid,
+                        gameId = gid,
+                        nameZh = (type(g.nameZh) == "string" and g.nameZh ~= "" and g.nameZh) or gid,
+                        nameEn = (type(g.nameEn) == "string" and g.nameEn ~= "" and g.nameEn) or "英文名称未配置",
+                        universeId = uId,
+                        isCurrent = false,
+                        scripts = {},
+                    }
+                    byGame[gid] = group
+                    table.insert(order, group)
+                end
+                table.insert(group.scripts, script)
             end
-            table.insert(group.scripts, script)
         end
     end
     table.sort(order, function(a, b) return tostring(a.gameId) < tostring(b.gameId) end)
@@ -124,11 +126,32 @@ function Runtime.gameGroups(scripts, universeId, placeId)
         scripts = currentScripts,
         universalScripts = universalScripts,
     }
-    local list = { currentEntry }
-    for _, group in ipairs(order) do
-        table.insert(list, group)
+    local q = string.lower((type(query) == "string" and query or ""):match("^%s*(.-)%s*$"))
+    local function groupMatches(grp)
+        if q == "" then return true end
+        local words = { grp.nameZh or "", grp.nameEn or "", grp.gameId or "" }
+        for _, s in ipairs(grp.scripts or {}) do
+            table.insert(words, s.nameZh or "")
+            table.insert(words, s.nameEn or "")
+            table.insert(words, type(s.scenario) == "string" and s.scenario or "")
+        end
+        for _, s in ipairs(grp.universalScripts or {}) do
+            table.insert(words, s.nameZh or "")
+            table.insert(words, s.nameEn or "")
+            table.insert(words, type(s.scenario) == "string" and s.scenario or "")
+        end
+        return string.find(string.lower(table.concat(words, " ")), q, 1, true) ~= nil
     end
-    return list, currentEntry
+    local list = {}
+    if q == "" or groupMatches(currentEntry) then
+        table.insert(list, currentEntry)
+    end
+    for _, group in ipairs(order) do
+        if groupMatches(group) then
+            table.insert(list, group)
+        end
+    end
+    return list, currentEntry, 1 + #order
 end
 
 -- One horizontal workspace on every device; undersized viewports scale it as a unit.
@@ -140,7 +163,7 @@ function Runtime.layout(availableWidth, availableHeight, count, universalCount, 
     local scale = math.min(1, availableWidth / width, availableHeight / height)
     count = math.max(0, tonumber(count) or 0)
     universalCount = math.max(0, tonumber(universalCount) or 0)
-    gameNavCount = math.max(1, tonumber(gameNavCount) or 1)
+    gameNavCount = math.max(0, tonumber(gameNavCount) or 0)
     if showUniversal == nil then showUniversal = true end
     local compact = width < 900 or height < 580
     local pad, gap, cardHeight = 20, 12, compact and 148 or 160
@@ -155,19 +178,25 @@ function Runtime.layout(availableWidth, availableHeight, count, universalCount, 
     local currentHeight = sectionHeight(count)
     local universalHeight = showUniversal and sectionHeight(universalCount) or 0
     local gridContentHeight = showUniversal and (currentHeight + 16 + universalHeight) or currentHeight
-    local mainTop = compact and 60 or 72
-    local detailHeight = compact and 66 or 74
-    local gridTop = mainTop + detailHeight + 8
+    local mainTop = compact and 58 or 70
+    local navBarHeight = 44
+    local detailTop = mainTop + navBarHeight + 8
+    local detailHeight = compact and 64 or 72
+    local gridTop = detailTop + detailHeight + 8
     local footerY = height - 52
-    local navItemHeight = compact and 42 or 46
-    local navGap = 6
-    local navContentHeight = gameNavCount * navItemHeight + math.max(0, gameNavCount - 1) * navGap
+    local gameCardHeight = compact and 104 or 116
+    local gameRows = math.ceil(gameNavCount / columns)
+    local galleryTop = mainTop + navBarHeight + 8
+    local galleryHeight = footerY - galleryTop - 10
+    local galleryContentHeight = gameRows > 0 and (gameRows * gameCardHeight + (gameRows - 1) * gap + 8) or 56
     return { width = width, height = height, scale = scale, pad = pad, gap = gap,
         cardHeight = cardHeight, compact = compact, left = left, mainWidth = mainWidth,
-        mainTop = mainTop, detailHeight = detailHeight, gridTop = gridTop, columns = columns, cellWidth = cellWidth,
+        mainTop = mainTop, navBarHeight = navBarHeight, detailTop = detailTop, detailHeight = detailHeight,
+        gridTop = gridTop, columns = columns, cellWidth = cellWidth,
         gridContentHeight = gridContentHeight, currentHeight = currentHeight, universalHeight = universalHeight, footerY = footerY,
         gridHeight = footerY - gridTop - 10,
-        navItemHeight = navItemHeight, navGap = navGap, navContentHeight = navContentHeight }
+        gameCardHeight = gameCardHeight, galleryTop = galleryTop, galleryHeight = galleryHeight,
+        galleryContentHeight = galleryContentHeight }
 end
 
 function Runtime.scenario(script)

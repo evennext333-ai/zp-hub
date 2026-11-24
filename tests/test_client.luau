@@ -346,9 +346,8 @@ check("未校验授权错误可显示两行且各控件不重叠",function()
         assert(status.Position.Y.Offset+status.Size.Y.Offset<=input.Position.Y.Offset)
         assert(input.Position.Y.Offset+input.Size.Y.Offset<=button.Position.Y.Offset)
         assert(button.Position.Y.Offset+button.Size.Y.Offset<=f.byName("Authorization").Size.Y.Offset)
-        local auth,nav=f.byName("Authorization"),f.byName("GameNavList")
-        assert(auth.Position.Y.Offset+auth.Size.Y.Offset<nav.Position.Y.Offset)
-        assert(nav.Position.Y.Offset+nav.Size.Y.Offset<=f.byName("HubWindow").Size.Y.Offset)
+        local auth,window=f.byName("Authorization"),f.byName("HubWindow")
+        assert(auth.Position.Y.Offset+auth.Size.Y.Offset<=window.Size.Y.Offset)
     end
 end)
 
@@ -606,7 +605,7 @@ check("PC、平板、手机及横屏布局与触控区域",function()
         assert(grid.CellSize.X.Offset>0 and grid.CellSize.Y.Offset==layout.cardHeight)
         local stop=f.byName("EndSession")
         assert(list.Position.Y.Offset+list.Size.Y.Offset<=stop.Position.Y.Offset or list.Position.X.Offset>=stop.Position.X.Offset+stop.Size.X.Offset,"卡片不覆盖结束按钮")
-        for _,name in ipairs({"ValidateKey","CloseView","CollapseView","EndSession","ToggleHub"}) do
+        for _,name in ipairs({"ValidateKey","CloseView","CollapseView","EndSession","ToggleHub","TabCurrentGame","TabAllGames","GameSearchInput"}) do
             assert(f.byName(name).Size.Y.Offset>=44,"触控目标至少44px："..name)
         end
         local footer=f.byName("EndSession")
@@ -909,17 +908,48 @@ check("支持游戏总列表切换、非当前游戏置灰禁加载与执行次�
         {id="hall-9",gameId="common",nameZh="通用辅助工具",nameEn="Common",enabled=true,universal=true,placeIds={},universeIds={},scenario="通用场景",loadCount=5},
     }
     local f=fixture({catalog=scripts,kind="MEMBER"})
-    assert(f.byName("GameNavCount").Text=="2 款")
+    assert(f.byName("GameNavCount").Text=="2 款" and f.byName("TabAllGames").Text=="全部游戏 (2)")
+    assert(f.byName("GameSearchInput").PlaceholderText=="搜索游戏或脚本名称…")
     assert(f.byName("LibraryTitle").Text=="当前测试游戏" and f.byName("GameMatchBadge").Text=="当前游戏")
+    assert(f.byName("ScriptGrid").Visible and not f.byName("GameNavList").Visible,"默认展示当前游戏详情与脚本")
     local function cardPart(cardId,partName)
         local card=f.byName("ScriptCard_"..cardId)
         for _,o in ipairs(f.objects)do if not o.destroyed and o.Parent==card and o.Name==partName then return o end end
         error("卡片子控件缺失："..cardId.."."..partName)
     end
+    local function navPart(navId,partName)
+        local nav=f.byName(navId)
+        for _,o in ipairs(f.objects)do if not o.destroyed and o.Parent==nav and o.Name==partName then return o end end
+        error("导航子控件缺失："..navId.."."..partName)
+    end
+    assert(navPart("GameNav_current","NavIcon").Image=="rbxthumb://type=GameIcon&id=1&w=150&h=150")
+    assert(navPart("GameNav_other","NavIcon").Image=="rbxthumb://type=GameIcon&id=88&w=150&h=150")
     assert(cardPart("hall-7","LoadCount").Text=="已执行 10 次")
     assert(cardPart("hall-9","LoadCount").Text=="已执行 5 次")
-    -- 切换到左侧支持游戏总列表中的其他游戏
+    -- 点击顶部「全部游戏」Tab 切换到 3 列全部游戏大画廊
+    f.byName("TabAllGames").Activated:Fire()
+    assert(f.byName("GameNavList").Visible and not f.byName("ScriptGrid").Visible and not f.byName("GameDetailCard").Visible)
+    assert(f.byName("GameGalleryLayout").FillDirectionMaxCells==3)
+    -- 测试全局游戏搜索框过滤大画廊与脚本列表
+    local searchBox=f.byName("GameSearchInput")
+    searchBox.Text="其他支持"
+    searchBox:GetPropertyChangedSignal("Text"):Fire()
+    assert(not pcall(f.byName,"GameNav_current") and pcall(f.byName,"GameNav_other"),"按搜索词过滤游戏大卡片")
+    searchBox.Text="不存在的关键词"
+    searchBox:GetPropertyChangedSignal("Text"):Fire()
+    assert(f.byName("GameNavEmpty").Visible,"无匹配游戏时展示空状态")
+    f.byName("TabCurrentGame").Activated:Fire()
+    assert(f.byName("CurrentEmpty").Visible and f.byName("UniversalEmpty").Visible,"无匹配脚本时显示空提示而非回退全量")
+    searchBox.Text=""
+    searchBox:GetPropertyChangedSignal("Text"):Fire()
+    assert(pcall(f.byName,"GameNav_current") and pcall(f.byName,"GameNav_other"))
+    -- 模拟真机 AbsoluteSize 瞬时归零，验证点击进入其他游戏详情不会缩小界面
+    f.resize(1040,720)
+    f.byName("HubViewport").AbsoluteSize=rb.Vector2.new(0,0)
+    f.byName("RSZH_Hub").AbsoluteSize=rb.Vector2.new(0,0)
     f.byName("GameNav_other").Activated:Fire()
+    assert(f.byName("WorkspaceScale").Scale==1,"视口瞬时为 0 时保留上一次有效尺寸，不缩小界面")
+    assert(f.byName("ScriptGrid").Visible and not f.byName("GameNavList").Visible and f.byName("BackToGallery").Visible)
     assert(f.byName("LibraryTitle").Text=="其他支持游戏" and f.byName("CurrentGameNameEn").Text=="Other Supported Game")
     assert(f.byName("GameMatchBadge").Text=="非当前游戏")
     assert(f.byName("CurrentGameImage").Image=="rbxthumb://type=GameIcon&id=88&w=150&h=150")
@@ -932,8 +962,10 @@ check("支持游戏总列表切换、非当前游戏置灰禁加载与执行次�
     otherCard.Activated:Fire();task.wait(0.03)
     assert(f.counter.loads==0 and f.counter.starts==0 and #f.counter.kicks==0)
     assert(cardPart("hall-8","LoadCount").Text=="已执行 42 次")
-    -- 切回当前游戏并执行加载，验证执行次数 +1
-    f.byName("GameNav_current").Activated:Fire()
+    -- 点击「← 全部游戏」返回大画廊，再点击「当前游戏」Tab 切回当前游戏并执行加载，验证执行次数 +1
+    f.byName("BackToGallery").Activated:Fire()
+    assert(f.byName("GameNavList").Visible)
+    f.byName("TabCurrentGame").Activated:Fire()
     assert(f.byName("LibraryTitle").Text=="当前测试游戏" and f.byName("UniversalSection").Visible)
     f.byName("ScriptCard_hall-7").Activated:Fire()
     untilTrue(function()return f.counter.starts==1 end)
