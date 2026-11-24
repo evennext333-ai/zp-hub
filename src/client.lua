@@ -5,9 +5,6 @@ env.HUB_KEY = nil
 local existing = env.__RSZH_HUB
 if type(existing) == "table" and existing.alive then
     assert(existing.policy == "background-v1", "Hub 会话策略已更新，请先重新进入游戏再加载")
-    if existing.uiVersion ~= "1.4.2" and type(existing.closeView) == "function" then
-        pcall(existing.closeView)
-    end
     existing.focus()
     if pendingKey ~= "" then
         if type(existing.submitKey) == "function" then existing.submitKey(pendingKey)
@@ -24,7 +21,7 @@ assert(type(kickPlayer) == "function", "运行环境需要支持结束当前游�
 local requestFn = request or http_request or (syn and syn.request) or (http and http.request)
 assert(type(requestFn) == "function", "运行环境需要支持 HTTPS POST 和请求头")
 assert(type(loadstring) == "function", "运行环境需要支持 loadstring")
-local owner = { alive = true, policy = "background-v1", uiVersion = "1.4.2" }
+local owner = { alive = true, policy = "background-v1" }
 local token, leaseUntil, sessionId = nil, 0, nil
 local scriptStarted, loading, loginBusy, requestSequence = false, false, false, 0
 local endSession, login, run, mountUI
@@ -120,15 +117,10 @@ login = function(inputKey)
     inputKey = nil
     key = key:match("^%s*(.-)%s*$")
     if key == "" then setStatus("请先填写 Key") return false end
-    local hwidFn = gethwid or getexecutorhwid or (type(identifyexecutor) == "function" and function()
-        local okName, name = pcall(identifyexecutor)
-        return "exec-" .. tostring(okName and name or "default") .. "-" .. tostring(player and player.UserId or 0)
-    end) or function()
-        return " fallback-player-" .. tostring(player and player.UserId or 0)
-    end
+    local hwidFn = gethwid or getexecutorhwid
+    if type(hwidFn) ~= "function" then setStatus("此运行环境缺少 HWID 接口") return false end
     local ok, hwid = pcall(hwidFn)
-    hwid = type(hwid) == "string" and hwid:match("^%s*(.-)%s*$") or ""
-    if not ok or #hwid < 1 or #hwid > 512 then
+    if not ok or type(hwid) ~= "string" or #hwid < 1 or #hwid > 512 then
         setStatus("设备标识无效，请检查运行环境")
         return false
     end
@@ -433,19 +425,16 @@ local function buildView(uiContext)
         local lastKind, lastAt = nil, -1
         local function makeTrigger(kind)
             return function()
+                if not uiContext.alive or btn.Parent == nil then return end
                 local now = os.clock()
                 if lastKind ~= nil and lastKind ~= kind and now - lastAt < 0.15 then return end
                 lastKind, lastAt = kind, now
                 callback()
             end
         end
-        connect(btn.Activated, makeTrigger("activated"))
-        if btn.MouseButton1Click then connect(btn.MouseButton1Click, makeTrigger("mouse")) end
-        connect(btn.InputBegan, function(inputObj)
-            if inputObj and (inputObj.UserInputType == Enum.UserInputType.MouseButton1 or inputObj.UserInputType == Enum.UserInputType.Touch) then
-                makeTrigger("input")()
-            end
-        end)
+        -- Native button signals disconnect on Destroy; do not retain replaced cards in UI cleanup.
+        btn.Activated:Connect(makeTrigger("activated"))
+        if btn.MouseButton1Click then btn.MouseButton1Click:Connect(makeTrigger("mouse")) end
     end
     bindClick(promptValidate, function()
         currentView.dismissAuthPrompt()
@@ -588,13 +577,13 @@ local function buildView(uiContext)
         local inner = sidebarWidth - 24
         local authTop = layout.mainTop
         local verified = token ~= nil and entitlement ~= nil
-        local authHeight = verified and (layout.compact and 112 or 132) or (layout.compact and 138 or 164)
+        local authHeight = verified and (layout.compact and 112 or 132) or (layout.compact and 154 or 164)
         place(authorization, pad, authTop, sidebarWidth, authHeight)
         place(authTitle, 12, 8, inner - 54, 18)
         place(authBadge, 12 + inner - 54, 8, 54, 18)
-        place(status, 12, 26, inner, layout.compact and 16 or 28)
-        place(keyBox, 12, layout.compact and 44 or 58, inner, 44)
-        place(loginButton, 12, layout.compact and 90 or 110, inner, 44)
+        place(status, 12, 28, inner, 28)
+        place(keyBox, 12, layout.compact and 60 or 62, inner, 44)
+        place(loginButton, 12, layout.compact and 106 or 110, inner, 44)
         place(kindLabel, 12, 28, inner, 18)
         place(expiryLabel, 12, layout.compact and 48 or 54, inner, 16)
         place(expiryValue, 12, layout.compact and 66 or 72, inner, 18)
@@ -841,9 +830,6 @@ endSession = function(message)
     end
 end
 owner.focus = mountUI
-owner.closeView = function()
-    if view then view.destroy() end
-end
 owner.submitKey = function(key)
     if owner.alive and not token and not loginBusy then task.spawn(login, key) end
 end

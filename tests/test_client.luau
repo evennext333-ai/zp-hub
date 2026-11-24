@@ -41,7 +41,7 @@ local function fixture(options)
     end
     local function create(class)
         local native = rb.Instance.new(class)
-        local data = {ClassName=class,AbsoluteSize=rb.Vector2.new(600,560),Activated=signal(),InputBegan=signal(),Destroying=signal(),signals={},native=native}
+        local data = {ClassName=class,AbsoluteSize=rb.Vector2.new(600,560),Activated=signal(),MouseButton1Click=signal(),FocusLost=signal(),InputBegan=signal(),Destroying=signal(),signals={},native=native}
         if options.centeredButtons and class=="TextButton" then data.AnchorPoint=rb.Vector2.new(0.5,0.5) end
         local item = setmetatable({}, {
             __index=function(_,key)
@@ -123,10 +123,16 @@ local function fixture(options)
         DateTime={fromIsoDate=function(value)return {UnixTimestampMillis=datetime.fromIsoDate(value).unixTimestampMillis}end,
             now=function()counter.dateReads=(counter.dateReads or 0)+1;return {UnixTimestampMillis=server.nowMillis}end},
         game={GameId=1,PlaceId=2,GetService=function(_,name)return services[name]end},
-        getgenv=function()return hubEnv end,gethwid=function()return "fixture-device" end,
+        getgenv=function()return hubEnv end,gethwid=function()
+            if options.hwidThrows then error("fixture HWID error") end
+            return options.hwidValue~=nil and options.hwidValue or "fixture-device"
+        end,
+        identifyexecutor=function()return "fixture-executor" end,
         Instance={new=create},UDim2=rb.UDim2,UDim=rb.UDim,Vector2=rb.Vector2,Color3=rb.Color3,Enum=rb.Enum,
         warn=function(message)table.insert(counter.warnings,message)end,
     }
+    if options.alternateHwid then environment.getexecutorhwid=environment.gethwid end
+    if options.noHwid or options.alternateHwid then environment.gethwid=nil end
     if options.fastHeartbeats then environment.os=table.clone(os);environment.os.clock=function()return os.clock()*80 end end
     local entry={id="hall-7",gameId="demo",nameZh="授权检查",nameEn="Check",enabled=true,universal=false,lifecycle="managed",placeIds={2},universeIds={1},tags={},aliases={},scenario="授权连接 / 状态检查",shortDescription="不应显示这段简介"}
     environment.request=function(args)
@@ -156,6 +162,7 @@ local function fixture(options)
         else
             local body=serde.decode("json",args.Body)
             assert(body.key==(options.expectedKey or "RSH_"..string.rep("a",43)),"仅发送夹具指定 Key")
+            counter.lastHwid=body.hwid
             counter.logins+=1;task.wait(server.delayLogin);err=server.loginError
             if server.loginNetworkOnce and counter.logins==1 then err="NETWORK_ERROR";status=503 end
             data={token="HS1.fixture",sessionId="fixture",remainingLeaseSeconds=server.lease,kind=options.kind or "GAME",gameId=options.gameId or "demo",entitlementExpiresAt=options.expiresAt}
@@ -260,6 +267,90 @@ if process.env.HUB_UI_PREVIEW_DIR then
         end
     end)
 end
+
+check("缺少真实 HWID 时不以执行器名称或账号替代设备校验",function()
+    local f=fixture({noHwid=true})
+    assert(f.counter.logins==0 and f.counter.loads==0 and #f.counter.kicks==0)
+    assert(f.byName("SessionStatus").Text=="此运行环境缺少 HWID 接口")
+    assert(f.env.HUB_KEY==nil and f.owner.alive)
+end)
+check("保留原 HWID 备选接口及原样请求值",function()
+    local f=fixture({alternateHwid=true,hwidValue=" fixture-device "})
+    assert(f.counter.logins==1 and f.counter.lastHwid==" fixture-device ")
+    assert(f.counter.loads==0 and #f.counter.kicks==0)
+end)
+check("异常或越界 HWID 不请求登录且不误踢",function()
+    for _,options in ipairs({{hwidThrows=true},{hwidValue=""},{hwidValue=7},{hwidValue=string.rep("a",513)}}) do
+        local f=fixture(options)
+        assert(f.counter.logins==0 and f.counter.loads==0 and #f.counter.kicks==0)
+        assert(f.byName("SessionStatus").Text=="设备标识无效，请检查运行环境")
+    end
+end)
+check("按下触屏或鼠标不加载脚本，释放兼容事件只执行一次",function()
+    local f=fixture()
+    local card=f.byName("ScriptCard_hall-7")
+    card.InputBegan:Fire({UserInputType=rb.Enum.UserInputType.Touch})
+    card.InputBegan:Fire({UserInputType=rb.Enum.UserInputType.MouseButton1})
+    task.wait(0.18)
+    assert(f.counter.loads==0 and f.counter.starts==0,"按下与滑动不视为点击")
+    card.MouseButton1Click:Fire();card.Activated:Fire()
+    untilTrue(function()return f.counter.starts==1 end)
+    assert(f.counter.loads==1 and f.counter.logins==1)
+end)
+check("校验与结束按钮仅在释放事件触发且兼容事件去重",function()
+    local f=fixture({noKey=true})
+    f.byName("KeyInput").Text="RSH_"..string.rep("a",43)
+    local validate,stop=f.byName("ValidateKey"),f.byName("EndSession")
+    validate.InputBegan:Fire({UserInputType=rb.Enum.UserInputType.Touch})
+    stop.InputBegan:Fire({UserInputType=rb.Enum.UserInputType.MouseButton1})
+    task.wait(0.18)
+    assert(f.counter.logins==0 and #f.counter.kicks==0 and f.owner.alive)
+    validate.Activated:Fire();validate.MouseButton1Click:Fire()
+    untilTrue(function()return f.counter.logins==1 end)
+    assert(f.counter.loads==0)
+    stop.MouseButton1Click:Fire();stop.Activated:Fire()
+    assert(#f.counter.kicks==1 and not f.owner.alive)
+end)
+check("回车显式校验 Key 而普通失焦不校验不加载",function()
+    local f=fixture({noKey=true})
+    local input=f.byName("KeyInput")
+    input.Text="RSH_"..string.rep("a",43)
+    input.FocusLost:Fire(false);task.wait(0.03)
+    assert(f.counter.logins==0)
+    input.FocusLost:Fire(true)
+    untilTrue(function()return f.counter.logins==1 end)
+    assert(f.counter.loads==0 and #f.counter.kicks==0)
+end)
+check("重跑入口只恢复现有控制器而不尝试局部热更新",function()
+    local f=fixture()
+    f.owner.uiVersion="old-fixture"
+    f.owner.closeView=function()error("不应主动关闭现有控制器界面")end
+    local owner=f.owner
+    f.client()
+    assert(f.env.__RSZH_HUB==owner and f.counter.logins==1 and f.counter.loads==0)
+end)
+check("重复导航销毁的卡片不会响应残留事件",function()
+    local f=fixture()
+    local old=f.byName("ScriptCard_hall-7")
+    f.byName("GameNav_current").Activated:Fire()
+    assert(old.destroyed and old.Parent==nil)
+    old.Activated:Fire();old.MouseButton1Click:Fire();task.wait(0.03)
+    assert(f.counter.loads==0 and f.counter.starts==0)
+end)
+check("未校验授权错误可显示两行且各控件不重叠",function()
+    local f=fixture({noHwid=true})
+    for _,size in ipairs({{700,340},{793,311},{627,297},{1040,720}}) do
+        f.resize(size[1],size[2])
+        local status,input,button=f.byName("SessionStatus"),f.byName("KeyInput"),f.byName("ValidateKey")
+        assert(status.Size.Y.Offset>=28,"紧凑模式保留两行状态空间")
+        assert(status.Position.Y.Offset+status.Size.Y.Offset<=input.Position.Y.Offset)
+        assert(input.Position.Y.Offset+input.Size.Y.Offset<=button.Position.Y.Offset)
+        assert(button.Position.Y.Offset+button.Size.Y.Offset<=f.byName("Authorization").Size.Y.Offset)
+        local auth,nav=f.byName("Authorization"),f.byName("GameNavList")
+        assert(auth.Position.Y.Offset+auth.Size.Y.Offset<nav.Position.Y.Offset)
+        assert(nav.Position.Y.Offset+nav.Size.Y.Offset<=f.byName("HubWindow").Size.Y.Offset)
+    end
+end)
 
 check("登录浏览心跳恢复都不预取正文，仅显式点击后加载一次",function()
     local f=fixture({kind="MEMBER"})

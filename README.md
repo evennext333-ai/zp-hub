@@ -45,7 +45,7 @@ Key 页请求头回归测试在本地与 CI 直接运行；真实 API 的 DOM �
 
 ```sh
 python3 /Users/lvjunling/work_space/flutter/persor/zp-hub/build.py \
-  --output /tmp/zp-hub-assets-1.4.1
+  --output /tmp/zp-hub-assets-1.4.3
 ```
 
 默认 API 是 `https://www.zldelf.cloud/api`，也可显式传 `--api-url`；根地址与 `/api` 前缀都支持，不生成重复 `/api/api`。
@@ -58,8 +58,8 @@ python3 /Users/lvjunling/work_space/flutter/persor/zp-hub/build.py \
 python3 /Users/lvjunling/work_space/flutter/persor/zp-hub/build.py \
   --prometheus-dir /tmp/prometheus \
   --lua-bin lua5.1 \
-  --output /tmp/zp-hub-assets-obfuscated-1.4.1
-HUB_TEST_LOADER=/tmp/zp-hub-assets-obfuscated-1.4.1/loader.lua \
+  --output /tmp/zp-hub-assets-obfuscated-1.4.3
+HUB_TEST_LOADER=/tmp/zp-hub-assets-obfuscated-1.4.3/loader.lua \
   lune run /Users/lvjunling/work_space/flutter/persor/zp-hub/tests/test_client.luau
 ```
 
@@ -72,6 +72,15 @@ HUB_TEST_LOADER=/tmp/zp-hub-assets-obfuscated-1.4.1/loader.lua \
 管理员日常 Key 查询、单游戏发放和权益吊销已接入现有 `/Users/lvjunling/work_space/flutter/persor/zldelf-admin` 的「Hub 授权」页面（`/hub/keys`），直接复用后台登录态，不单独登录。
 
 本仓库 Key 网页保留为会员自助与旧链接兼容入口，会员领取/重置仍使用用户端登录态；管理员 JWT 不代替会员授权。网页权益改为可读卡片，服务端文本只作为文本节点渲染；明文 Key 仍仅在生成时显示，不写本地存储。管理后台页面详见 `/Users/lvjunling/work_space/flutter/persor/zldelf-admin/docs/hub-keys.md`。
+
+## 1.4.3 界面回归修复（审查 1.4.2）
+
+- 保留 1.4.2 的单按钮授权提示、Key 输入裁剪、回车校验与左侧游戏导航；错误状态保留两行高度，PC、平板、横屏手机的输入、按钮与导航不重叠。
+- 按钮使用释放后的 Activated，保留 MouseButton1Click 兼容并去重；按下、触屏滑动不触发加载、校验或结束本局，标题栏按下拖动仍独立工作。销毁卡片由原生事件生命周期回收，不在视图清理队列累积历史卡片。
+- 恢复 1.4.1 的真实 HWID 要求：只接受 gethwid/getexecutorhwid，不使用执行器名称或玩家账号代替设备标识；设备值、登录及授权协议原样保留。
+- 重跑入口只聚焦或恢复现有视图，不尝试跨版本局部热更新；升级后请先重新进入游戏。关闭、销毁及收起仍只处理 UI，独立心跳和看门狗持续校验顶号、到期及租约。
+- 仅提交和发布 Hub；既有 API、授权规则、原脚本及启用状态保持不变，不部署后端或管理后台。远端 hub-v1.4.2 已存在，修复使用新标签 hub-v1.4.3，不覆盖历史版本。
+- 新增回归覆盖 HWID 缺失/异常/长度、真实备选接口、按下取消、兼容点击去重、回车与失焦、单例复用、销毁卡片事件及紧凑错误布局；源码与真实混淆产物均运行客户端及后台监控测试。真实执行器触摸、文字栅格化、图片与 Kick 行为仍需真机复核。
 
 ## 1.4.0 剩余有效期与当前游戏
 
@@ -105,14 +114,13 @@ HUB_TEST_LOADER=/tmp/zp-hub-assets-obfuscated-1.4.1/loader.lua \
 5. 已登录且未运行脚本时分别关闭、销毁、收起 UI，模拟顶号和会员/Key 到期，仍只触发一次 Kick；运行脚本后和持续断网下也复核。真实 Kick 在测试中使用替身。
 6. PC/平板/横屏手机检查三列、分区滚动、空区、长文本、拖动边界、输入/状态/结束按钮的空间；预览仅合成数据，实际执行器和设备须另行验收。
 
-## 全部脚本浏览（设计，尚未实现）
+## 全部脚本浏览（1.4.1 起）
 
-- 主界面默认保持「当前游戏优先」：当前游戏区在首屏，通用脚本在下方，不把所有其他游戏卡片插在这两个区域之前。
-- 标题右侧增加低强调「全部脚本（N）」入口，打开独立浏览页；返回按钮回到当前游戏页并保留滚动位置、授权与已启动状态，不创建新授权控制器。
-- 浏览页按游戏分组，顶部固定当前游戏分组，其次通用，再列其他游戏；每组展示游戏图片、中英文名、脚本数量，展开后展示名称和 scenario 的三列卡片。搜索仅放在此浏览页，不恢复主界面的工具栏。
-- 当前匹配且有权限的项目可点击加载；未校验先弹窗，未授权提示权益，其他游戏项目仅展示「进入对应游戏后使用」，不为浏览发起脚本下载。单局仍只启动一份原脚本，切换须重新进入游戏。
+- 左侧在授权卡片下显示已支持游戏导航，当前游戏排首位并默认选中；当前游戏脚本在右侧上方，通用脚本在其下方，固定三列。
+- 点击左侧其他游戏，右侧更新图片、中英文名、脚本数量及名称、scenario、执行次数；非当前游戏卡片置灰，只供预览，返回当前游戏后恢复可加载分区。不增加搜索栏或另一套授权控制器。
+- 当前匹配且有权限的项目可点击加载；未校验先弹窗，未授权提示权益，其他游戏项目提示进入对应游戏后使用，不为浏览发起脚本下载。单局仍只启动一份原脚本，切换须重新进入游戏。
 - 「全部」仅指当前 API 中已发布且 Hub 已启用的目录项，不等于大厅全部记录，不自动上架、启用待验收脚本或暴力区。
-- 目录、登录、心跳、展开分组、图片加载、搜索、收起和恢复界面都只读元数据；只有用户明确点击可加载项且服务端验证通过，加载接口才返回正文。浏览页不会内嵌、预取、缓存或按源地址直接抓取脚本正文。
+- 目录、登录、心跳、导航、图片加载、收起和恢复界面都只读元数据；只有用户明确点击可加载项且服务端验证通过，加载接口才返回正文。不内嵌、预取、缓存或按源地址直接抓取脚本正文。
 
 ## Key 校验与卡片点击
 
