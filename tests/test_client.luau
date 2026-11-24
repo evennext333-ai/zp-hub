@@ -360,6 +360,10 @@ check("卡密提示缺失时显示待同步且免卡密项目仍要求 Hub Key",
     assert(f.byName("KeyBadge").Text=="卡密待同步")
     f.byName("ScriptCard_hall-7").Activated:Fire()
     assert(f.byName("AuthPrompt").Visible and f.counter.logins==0 and f.counter.loads==0)
+    local free=fixture({noKey=true,catalog={{id="hall-7",gameId="demo",nameZh="免卡密夹具",nameEn="Keyless fixture",requiresKey=false,enabled=true,universal=false,placeIds={2},universeIds={1},aliases={},tags={}}}})
+    assert(free.byName("KeyBadge").Text=="脚本免卡密")
+    free.byName("ScriptCard_hall-7").Activated:Fire()
+    assert(free.byName("AuthPrompt").Visible and free.counter.logins==0 and free.counter.loads==0)
 end)
 
 check("缺少真实 HWID 时不以执行器名称或账号替代设备校验",function()
