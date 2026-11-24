@@ -5,6 +5,9 @@ env.HUB_KEY = nil
 local existing = env.__RSZH_HUB
 if type(existing) == "table" and existing.alive then
     assert(existing.policy == "background-v1", "Hub 会话策略已更新，请先重新进入游戏再加载")
+    if existing.uiVersion ~= "1.4.2" and type(existing.closeView) == "function" then
+        pcall(existing.closeView)
+    end
     existing.focus()
     if pendingKey ~= "" then
         if type(existing.submitKey) == "function" then existing.submitKey(pendingKey)
@@ -21,7 +24,7 @@ assert(type(kickPlayer) == "function", "运行环境需要支持结束当前游�
 local requestFn = request or http_request or (syn and syn.request) or (http and http.request)
 assert(type(requestFn) == "function", "运行环境需要支持 HTTPS POST 和请求头")
 assert(type(loadstring) == "function", "运行环境需要支持 loadstring")
-local owner = { alive = true, policy = "background-v1" }
+local owner = { alive = true, policy = "background-v1", uiVersion = "1.4.2" }
 local token, leaseUntil, sessionId = nil, 0, nil
 local scriptStarted, loading, loginBusy, requestSequence = false, false, false, 0
 local endSession, login, run, mountUI
@@ -117,10 +120,15 @@ login = function(inputKey)
     inputKey = nil
     key = key:match("^%s*(.-)%s*$")
     if key == "" then setStatus("请先填写 Key") return false end
-    local hwidFn = gethwid or getexecutorhwid
-    if type(hwidFn) ~= "function" then setStatus("此运行环境缺少 HWID 接口") return false end
+    local hwidFn = gethwid or getexecutorhwid or (type(identifyexecutor) == "function" and function()
+        local okName, name = pcall(identifyexecutor)
+        return "exec-" .. tostring(okName and name or "default") .. "-" .. tostring(player and player.UserId or 0)
+    end) or function()
+        return " fallback-player-" .. tostring(player and player.UserId or 0)
+    end
     local ok, hwid = pcall(hwidFn)
-    if not ok or type(hwid) ~= "string" or #hwid < 1 or #hwid > 512 then
+    hwid = type(hwid) == "string" and hwid:match("^%s*(.-)%s*$") or ""
+    if not ok or #hwid < 1 or #hwid > 512 then
         setStatus("设备标识无效，请检查运行环境")
         return false
     end
@@ -271,9 +279,11 @@ local function buildView(uiContext)
     local function input(parent, name, placeholder)
         local field = rounded(object("TextBox", {
             Name = name, BackgroundColor3 = colors.input, TextColor3 = colors.text,
-            PlaceholderColor3 = colors.muted, Font = Enum.Font.Gotham, TextSize = 13,
-            TextXAlignment = Enum.TextXAlignment.Left, PlaceholderText = placeholder,
-            Text = "", ClearTextOnFocus = false, BorderSizePixel = 0,
+            PlaceholderColor3 = colors.muted, Font = Enum.Font.Gotham, TextSize = 12,
+            TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Center,
+            PlaceholderText = placeholder, Text = "", ClearTextOnFocus = false, BorderSizePixel = 0,
+            ClipsDescendants = true, TextWrapped = false, MultiLine = false,
+            TextTruncate = Enum.TextTruncate.AtEnd, ZIndex = 6,
         }, parent), 9)
         object("UIPadding", { PaddingLeft = UDim.new(0, 10), PaddingRight = UDim.new(0, 10) }, field)
         outline(field)
@@ -314,6 +324,7 @@ local function buildView(uiContext)
     local status = text(authorization, "SessionStatus", statusMessage, 11, colors.muted)
     local keyBox = input(authorization, "KeyInput", "请输入 Key")
     local loginButton = button(authorization, "ValidateKey", "校验 Key", true)
+    loginButton.ZIndex = 6
     local kindLabel = text(authorization, "EntitlementKind", "", 14)
     kindLabel.Font = Enum.Font.GothamMedium
     local expiryLabel = text(authorization, "ExpiryLabel", "剩余有效期", 11, colors.muted)
@@ -397,12 +408,9 @@ local function buildView(uiContext)
     local promptBody = text(promptPanel, "AuthPromptBody", "在左侧输入 Key 并完成校验后，再点击脚本加载。", 14, colors.muted)
     promptBody.ZIndex = 52
     place(promptBody, 20, 58, 300, 54)
-    local promptLater = button(promptPanel, "AuthPromptLater", "稍后")
-    promptLater.ZIndex = 52
-    place(promptLater, 20, 132, 112, 44)
-    local promptValidate = button(promptPanel, "AuthPromptValidate", "去校验 Key", true)
+    local promptValidate = button(promptPanel, "AuthPromptValidate", "知道了", true)
     promptValidate.ZIndex = 52
-    place(promptValidate, 144, 132, 176, 44)
+    place(promptValidate, 20, 132, 300, 44)
 
     local cards, cardParts = {}, {}
     local navButtons, navParts = {}, {}
@@ -421,8 +429,25 @@ local function buildView(uiContext)
         end)
         uiContext.onCleanup(function() connection:Disconnect() end)
     end
-    connect(promptLater.Activated, currentView.dismissAuthPrompt)
-    connect(promptValidate.Activated, function()
+    local function bindClick(btn, callback)
+        local lastKind, lastAt = nil, -1
+        local function makeTrigger(kind)
+            return function()
+                local now = os.clock()
+                if lastKind ~= nil and lastKind ~= kind and now - lastAt < 0.15 then return end
+                lastKind, lastAt = kind, now
+                callback()
+            end
+        end
+        connect(btn.Activated, makeTrigger("activated"))
+        if btn.MouseButton1Click then connect(btn.MouseButton1Click, makeTrigger("mouse")) end
+        connect(btn.InputBegan, function(inputObj)
+            if inputObj and (inputObj.UserInputType == Enum.UserInputType.MouseButton1 or inputObj.UserInputType == Enum.UserInputType.Touch) then
+                makeTrigger("input")()
+            end
+        end)
+    end
+    bindClick(promptValidate, function()
         currentView.dismissAuthPrompt()
         if not loginBusy then pcall(function() keyBox:CaptureFocus() end) end
     end)
@@ -441,7 +466,7 @@ local function buildView(uiContext)
         if not token then
             promptTitle.Text = loginBusy and "正在校验 Key" or "请先校验 Key"
             promptBody.Text = loginBusy and "授权正在校验，请稍候。成功后再次点击脚本加载。" or "在左侧输入 Key 并完成校验后，再点击脚本加载。"
-            promptValidate.Text = loginBusy and "知道了" or "去校验 Key"
+            promptValidate.Text = "知道了"
             authPrompt.Visible = true
             return
         end
@@ -459,6 +484,8 @@ local function buildView(uiContext)
         end
         expiryValue.Text = Runtime.remaining(seconds)
     end
+    local fit
+    local lastVerifiedState = nil
     connect(gameImage:GetPropertyChangedSignal("IsLoaded"), function() gamePlaceholder.Visible = not gameImage.IsLoaded end)
     currentView.refresh = function()
         status.Text = statusMessage
@@ -474,6 +501,12 @@ local function buildView(uiContext)
             kindLabel.Text = entitlement.kind == "MEMBER" and "全游戏会员" or "单游戏 · 30 天"
             updateRemaining()
             grantNote.Text = entitlement.kind == "MEMBER" and "当前游戏及通用脚本" or "仅限绑定游戏"
+        end
+        if lastVerifiedState ~= nil and lastVerifiedState ~= verified and fit then
+            lastVerifiedState = verified
+            fit()
+        else
+            lastVerifiedState = verified
         end
         local viewingOther = activeGroup and not activeGroup.isCurrent
         if viewingOther then
@@ -537,7 +570,7 @@ local function buildView(uiContext)
         if input == dragInput or (dragInput and dragInput.UserInputType == Enum.UserInputType.MouseButton1 and input.UserInputType == Enum.UserInputType.MouseButton1) then dragInput = nil end
     end)
     connect(inputService.WindowFocusReleased, function() dragInput = nil end)
-    local function fit()
+    fit = function()
         local size = viewport.AbsoluteSize
         local showUniversal = not activeGroup or activeGroup.isCurrent
         local layout = Runtime.layout(size.X, size.Y, currentSection.size, universalSection.size, #navButtons, showUniversal)
@@ -554,25 +587,26 @@ local function buildView(uiContext)
         local sidebarWidth = layout.left - pad - 12
         local inner = sidebarWidth - 24
         local authTop = layout.mainTop
-        local authHeight = layout.compact and 164 or 184
+        local verified = token ~= nil and entitlement ~= nil
+        local authHeight = verified and (layout.compact and 112 or 132) or (layout.compact and 138 or 164)
         place(authorization, pad, authTop, sidebarWidth, authHeight)
-        place(authTitle, 12, 10, inner - 54, 18)
-        place(authBadge, 12 + inner - 54, 10, 54, 18)
-        place(status, 12, 30, inner, layout.compact and 30 or 36)
-        place(keyBox, 12, layout.compact and 64 or 74, inner, 44)
-        place(loginButton, 12, layout.compact and 112 or 126, inner, 44)
-        place(kindLabel, 12, 34, inner, 20)
-        place(expiryLabel, 12, layout.compact and 60 or 66, inner, 16)
-        place(expiryValue, 12, layout.compact and 80 or 88, inner, 20)
-        place(grantNote, 12, layout.compact and 108 or 118, inner, 32)
+        place(authTitle, 12, 8, inner - 54, 18)
+        place(authBadge, 12 + inner - 54, 8, 54, 18)
+        place(status, 12, 26, inner, layout.compact and 16 or 28)
+        place(keyBox, 12, layout.compact and 44 or 58, inner, 44)
+        place(loginButton, 12, layout.compact and 90 or 110, inner, 44)
+        place(kindLabel, 12, 28, inner, 18)
+        place(expiryLabel, 12, layout.compact and 48 or 54, inner, 16)
+        place(expiryValue, 12, layout.compact and 66 or 72, inner, 18)
+        place(grantNote, 12, layout.compact and 86 or 96, inner, 24)
 
         -- 左侧下方：支持的游戏总列表
-        local navTop = authTop + authHeight + 10
+        local navTop = authTop + authHeight + 8
         place(navHeading, pad, navTop, sidebarWidth - 52, 18)
         place(navCountLabel, pad + sidebarWidth - 50, navTop, 50, 18)
-        local navListTop = navTop + 22
-        local navListBottom = layout.compact and (layout.footerY - 6) or (layout.height - 16)
-        local navListHeight = math.max(44, navListBottom - navListTop)
+        local navListTop = navTop + 20
+        local navListBottom = layout.height - 12
+        local navListHeight = math.max(54, navListBottom - navListTop)
         place(gameNavList, pad, navListTop, sidebarWidth, navListHeight)
         for idx, navBtn in ipairs(navButtons) do
             local np = navParts[navBtn]
@@ -625,13 +659,13 @@ local function buildView(uiContext)
         list.CanvasSize = UDim2.fromOffset(0, layout.gridContentHeight)
         list.ScrollingEnabled = true
         place(footerNote, layout.left, layout.footerY + 6, layout.mainWidth - 124, 36)
-        place(stopButton, layout.compact and pad or w - pad - 112, layout.footerY, layout.compact and sidebarWidth or 112, 44)
+        place(stopButton, w - pad - 112, layout.footerY, 112, 44)
         footerNote.Visible = not layout.compact
         moveWindow(dragOffset)
     end
     connect(viewport:GetPropertyChangedSignal("AbsoluteSize"), fit)
-    connect(collapseButton.Activated, function() dragInput = nil panel.Visible = false toggle.Visible = true end)
-    connect(toggle.Activated, function() panel.Visible = true toggle.Visible = false end)
+    bindClick(collapseButton, function() dragInput = nil panel.Visible = false toggle.Visible = true end)
+    bindClick(toggle, function() panel.Visible = true toggle.Visible = false end)
 
     local renderGroup
     local function createCard(script, sec, playableHere)
@@ -662,7 +696,7 @@ local function buildView(uiContext)
         local action = text(card, "CardAction", available and "加载  →" or (not playableHere and "非当前游戏" or "待上架"), 12, available and colors.accent or colors.disabledText)
         action.TextYAlignment = Enum.TextYAlignment.Center
         action.TextXAlignment = Enum.TextXAlignment.Right
-        card.Activated:Connect(function()
+        bindClick(card, function()
             requestScript(script)
         end)
         cardParts[card] = { title = title, scenario = scenario, loadCount = loadCount, action = action, script = script }
@@ -734,7 +768,7 @@ local function buildView(uiContext)
             sLabel.TextWrapped = false
             local bLabel = text(btn, "NavBadge", grp.isCurrent and "当前" or "预览", 11, grp.isCurrent and colors.accent or colors.muted)
             bLabel.TextXAlignment = Enum.TextXAlignment.Right
-            btn.Activated:Connect(function()
+            bindClick(btn, function()
                 renderGroup(grp)
             end)
             navParts[btn] = { group = grp, stroke = stroke, bar = bar, title = tLabel, sub = sLabel, badge = bLabel }
@@ -742,9 +776,19 @@ local function buildView(uiContext)
         end
         renderGroup(targetGroup)
     end
-    connect(loginButton.Activated, function() task.spawn(login, keyBox.Text) end)
-    connect(stopButton.Activated, function() endSession("你已结束本局，请重新进入游戏后使用 Hub") end)
-    connect(closeButton.Activated, closeUI)
+    if keyBox.FocusLost then
+        connect(keyBox.FocusLost, function(enterPressed)
+            if enterPressed and loginButton.Active then
+                task.spawn(login, keyBox.Text)
+            end
+        end)
+    end
+    bindClick(loginButton, function()
+        if not loginButton.Active then return end
+        task.spawn(login, keyBox.Text)
+    end)
+    bindClick(stopButton, function() endSession("你已结束本局，请重新进入游戏后使用 Hub") end)
+    bindClick(closeButton, closeUI)
     connect(gui.Destroying, closeUI)
     currentView.render = render
     render()
@@ -797,6 +841,9 @@ endSession = function(message)
     end
 end
 owner.focus = mountUI
+owner.closeView = function()
+    if view then view.destroy() end
+end
 owner.submitKey = function(key)
     if owner.alive and not token and not loginBusy then task.spawn(login, key) end
 end

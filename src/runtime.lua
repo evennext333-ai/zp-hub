@@ -155,10 +155,10 @@ function Runtime.layout(availableWidth, availableHeight, count, universalCount, 
     local currentHeight = sectionHeight(count)
     local universalHeight = showUniversal and sectionHeight(universalCount) or 0
     local gridContentHeight = showUniversal and (currentHeight + 16 + universalHeight) or currentHeight
-    local mainTop = compact and 64 or 76
-    local detailHeight = compact and 68 or 76
+    local mainTop = compact and 60 or 72
+    local detailHeight = compact and 66 or 74
     local gridTop = mainTop + detailHeight + 8
-    local footerY = height - 56
+    local footerY = height - 52
     local navItemHeight = compact and 42 or 46
     local navGap = 6
     local navContentHeight = gameNavCount * navItemHeight + math.max(0, gameNavCount - 1) * navGap
@@ -166,7 +166,7 @@ function Runtime.layout(availableWidth, availableHeight, count, universalCount, 
         cardHeight = cardHeight, compact = compact, left = left, mainWidth = mainWidth,
         mainTop = mainTop, detailHeight = detailHeight, gridTop = gridTop, columns = columns, cellWidth = cellWidth,
         gridContentHeight = gridContentHeight, currentHeight = currentHeight, universalHeight = universalHeight, footerY = footerY,
-        gridHeight = compact and height - gridTop - 16 or footerY - gridTop - 12,
+        gridHeight = footerY - gridTop - 10,
         navItemHeight = navItemHeight, navGap = navGap, navContentHeight = navContentHeight }
 end
 
