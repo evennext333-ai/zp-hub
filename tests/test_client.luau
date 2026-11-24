@@ -41,7 +41,7 @@ local function fixture(options)
     end
     local function create(class)
         local native = rb.Instance.new(class)
-        local data = {ClassName=class,AbsoluteSize=rb.Vector2.new(600,560),Activated=signal(),MouseButton1Click=signal(),FocusLost=signal(),InputBegan=signal(),Destroying=signal(),signals={},native=native}
+        local data = {ClassName=class,AbsoluteSize=rb.Vector2.new(600,560),Activated=signal(),MouseButton1Click=signal(),MouseButton1Up=signal(),FocusLost=signal(),InputBegan=signal(),InputEnded=signal(),ChildAdded=signal(),Destroying=signal(),signals={},native=native}
         if options.centeredButtons and class=="TextButton" then data.AnchorPoint=rb.Vector2.new(0.5,0.5) end
         local item = setmetatable({}, {
             __index=function(_,key)
@@ -50,7 +50,7 @@ local function fixture(options)
                 if ok then return value end
                 return nil
             end,
-            __newindex=function(_,key,value)
+            __newindex=function(self,key,value)
                 if server.uiWriteError and key=="Text" then error("fixture UI write error") end
                 if key=="Parent" then
                     native.Parent=type(value)=="table" and value.native or nil
@@ -59,6 +59,9 @@ local function fixture(options)
                     assert(ok,"无效 Roblox 属性："..class.."."..key.." / "..tostring(err))
                 end
                 data[key]=value
+                if key=="Parent" and type(value)=="table" and value.ChildAdded then
+                    value.ChildAdded:Fire(self)
+                end
             end,
         })
         data.CaptureFocus=function()counter.focusedKeyInput=true end
@@ -131,6 +134,16 @@ local function fixture(options)
         Instance={new=create},UDim2=rb.UDim2,UDim=rb.UDim,Vector2=rb.Vector2,Color3=rb.Color3,Enum=rb.Enum,
         warn=function(message)table.insert(counter.warnings,message)end,
     }
+    if options.withHui then
+        local huiContainer = {Name="HiddenGui"}
+        environment.gethui = function() counter.huiLookups = (counter.huiLookups or 0) + 1; return huiContainer end
+        environment.huiContainer = huiContainer
+    end
+    if options.withCoreGui then
+        local coreContainer = {Name="CoreGui"}
+        services.CoreGui = coreContainer
+        environment.coreContainer = coreContainer
+    end
     if options.alternateHwid then environment.getexecutorhwid=environment.gethwid end
     if options.noHwid or options.alternateHwid then environment.gethwid=nil end
     if options.fastHeartbeats then environment.os=table.clone(os);environment.os.clock=function()return os.clock()*80 end end
@@ -901,11 +914,11 @@ check("旧策略单例要求重新进入游戏",function()
 end)
 check("支持游戏总列表切换、非当前游戏置灰禁加载与执行次数累加",function()
     local scripts={
-        {id="hall-7",gameId="demo",nameZh="当前游戏工具",nameEn="Current",enabled=true,universal=false,placeIds={2},universeIds={1},scenario="当前场景",loadCount=10,
+        {id="hall-7",gameId="demo",nameZh="当前游戏工具",nameEn="Current",enabled=true,universal=false,placeIds={2},universeIds={1},scenario="当前场景",loadCount=10,requiresKey=true,
             game={id="demo",nameZh="当前测试游戏",nameEn="Current Game"}},
-        {id="hall-8",gameId="other",nameZh="其他游戏工具",nameEn="Other",enabled=true,universal=false,placeIds={99},universeIds={88},scenario="其他场景",loadCount=42,
+        {id="hall-8",gameId="other",nameZh="其他游戏工具",nameEn="Other",enabled=true,universal=false,placeIds={99},universeIds={88},scenario="其他场景",loadCount=42,requiresKey=true,
             game={id="other",nameZh="其他支持游戏",nameEn="Other Supported Game"}},
-        {id="hall-9",gameId="common",nameZh="通用辅助工具",nameEn="Common",enabled=true,universal=true,placeIds={},universeIds={},scenario="通用场景",loadCount=5},
+        {id="hall-9",gameId="common",nameZh="通用辅助工具",nameEn="Common",enabled=true,universal=true,placeIds={},universeIds={},scenario="通用场景",loadCount=5,requiresKey=false},
     }
     local f=fixture({catalog=scripts,kind="MEMBER"})
     assert(f.byName("GameNavCount").Text=="2 款" and f.byName("TabAllGames").Text=="全部游戏 (2)")
@@ -925,7 +938,9 @@ check("支持游戏总列表切换、非当前游戏置灰禁加载与执行次�
     assert(navPart("GameNav_current","NavIcon").Image=="rbxthumb://type=GameIcon&id=1&w=150&h=150")
     assert(navPart("GameNav_other","NavIcon").Image=="rbxthumb://type=GameIcon&id=88&w=150&h=150")
     assert(cardPart("hall-7","LoadCount").Text=="已执行 10 次")
+    assert(cardPart("hall-7","KeyBadge").Text=="🔑 需Key")
     assert(cardPart("hall-9","LoadCount").Text=="已执行 5 次")
+    assert(cardPart("hall-9","KeyBadge").Text=="免Key")
     -- 点击顶部「全部游戏」Tab 切换到 3 列全部游戏大画廊
     f.byName("TabAllGames").Activated:Fire()
     assert(f.byName("GameNavList").Visible and not f.byName("ScriptGrid").Visible and not f.byName("GameDetailCard").Visible)
@@ -973,6 +988,36 @@ check("支持游戏总列表切换、非当前游戏置灰禁加载与执行次�
     -- 销毁并恢复界面后保留递增后的执行次数
     f.destroy();f.client()
     assert(cardPart("hall-7","LoadCount").Text=="已执行 11 次")
+end)
+check("Fluent 风格容器隔离（gethui / CoreGui）、防外部注入 UIScale 缩小与触控释放点击兼容",function()
+    local fHui=fixture({withHui=true,withCoreGui=true})
+    assert(fHui.counter.guiLookups==1 and fHui.counter.huiLookups==1,"优先挂载到 gethui 隔离容器，避免被游戏 PlayerGui 脚本劫持")
+    local fCore=fixture({withCoreGui=true,noKey=true})
+    assert(fCore.counter.guiLookups==1)
+    local validate=fCore.byName("ValidateKey")
+    assert(validate.AutoButtonColor==false,"禁用原生自动缩放变色")
+    -- 模拟游戏脚本向按钮强行注入 UIScale 试图在点击时缩小按钮
+    local injectedScale=fCore.objects[1]
+    local rogueScale=rb.Instance.new("UIScale")
+    assert(rogueScale.ClassName=="UIScale")
+    local fakeScale={ClassName="UIScale",destroyed=false,Destroy=function(self)self.destroyed=true end}
+    validate.ChildAdded:Fire(fakeScale)
+    assert(fakeScale.destroyed,"外部向按钮注入的 UIScale 应被立即销毁，防止点击缩小")
+    -- 模拟移动端执行器仅触发 InputBegan + InputEnded（不触发 Activated）的场景
+    fCore.byName("KeyInput").Text="RSH_"..string.rep("a",43)
+    validate.InputBegan:Fire({UserInputType=rb.Enum.UserInputType.Touch,Position=rb.Vector3.new(50,50,0)})
+    assert(fCore.counter.logins==0,"仅按下时不触发")
+    validate.InputEnded:Fire({UserInputType=rb.Enum.UserInputType.Touch,Position=rb.Vector3.new(54,52,0)})
+    untilTrue(function()return fCore.counter.logins==1 end)
+    -- 模拟按下后大幅滑动（超过24px），释放时不误触点击
+    local tabAll=fCore.byName("TabAllGames")
+    tabAll.InputBegan:Fire({UserInputType=rb.Enum.UserInputType.Touch,Position=rb.Vector3.new(100,100,0)})
+    tabAll.InputEnded:Fire({UserInputType=rb.Enum.UserInputType.Touch,Position=rb.Vector3.new(160,160,0)})
+    assert(not fCore.byName("GameNavList").Visible,"大幅滑动释放不误触按钮")
+    -- 正常原地释放切换 Tab
+    tabAll.InputBegan:Fire({UserInputType=rb.Enum.UserInputType.Touch,Position=rb.Vector3.new(100,100,0)})
+    tabAll.InputEnded:Fire({UserInputType=rb.Enum.UserInputType.Touch,Position=rb.Vector3.new(102,101,0)})
+    assert(fCore.byName("GameNavList").Visible,"触控原地释放正常切换全部游戏画廊")
 end)
 print("通过："..passed.." 项界面/监控解耦、原样加载、授权失效断开与竞态回归；Kick 为本地替身")
 

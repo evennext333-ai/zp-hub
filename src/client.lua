@@ -214,18 +214,38 @@ run = function(script)
 end
 
 -- UI 的资源作用域仅属于这一轮视图；销毁它不会改变授权控制器。
+-- 采用 Fluent UI 开源库架构（CoreGui / gethui 容器隔离 + AutoButtonColor=false + 多端释放事件兼容 + 防外部篡改），彻底避免游戏自带 PlayerGui 脚本劫持按钮导致点击缩小或失效。
 local function buildView(uiContext)
-    local guiParent = player:WaitForChild("PlayerGui", 10)
-    assert(guiParent, "玩家界面尚未就绪，请重新加载入口恢复界面")
+    local playerGui = player:WaitForChild("PlayerGui", 10)
+    assert(playerGui, "玩家界面尚未就绪，请重新加载入口恢复界面")
+    local guiParent = playerGui
+    if type(gethui) == "function" then
+        local okHui, hui = pcall(gethui)
+        if okHui and hui then guiParent = hui end
+    elseif type(get_hidden_gui) == "function" then
+        local okHidden, hidden = pcall(get_hidden_gui)
+        if okHidden and hidden then guiParent = hidden end
+    end
+    if guiParent == playerGui then
+        local okCore, coreGui = pcall(function() return game:GetService("CoreGui") end)
+        if okCore and coreGui then guiParent = coreGui end
+    end
     local function object(className, properties, parent)
         local item = Instance.new(className)
-        if className == "TextButton" then item.Style = Enum.ButtonStyle.Custom end
+        if className == "TextButton" then
+            item.Style = Enum.ButtonStyle.Custom
+            item.AutoButtonColor = false
+        end
         if className == "Frame" or className == "ScrollingFrame" or className == "TextLabel" or className == "TextButton" or className == "TextBox" or className == "ImageLabel" then
             item.AnchorPoint = Vector2.new(0, 0)
             item.AutomaticSize = Enum.AutomaticSize.None
             item.SizeConstraint = Enum.SizeConstraint.RelativeXY
             item.Rotation = 0
             item.ZIndex = 2
+        end
+        if className == "TextLabel" or className == "ImageLabel" then
+            item.Active = false
+            item.Selectable = false
         end
         for key, value in pairs(properties) do item[key] = value end
         item.Parent = parent
@@ -264,7 +284,7 @@ local function buildView(uiContext)
         local item = rounded(object("TextButton", {
             Name = name, BackgroundColor3 = primary and colors.accent or colors.surface,
             TextColor3 = primary and colors.ink or colors.text, Font = Enum.Font.GothamMedium,
-            TextSize = 13, TextScaled = false, Text = value, Selectable = true, AutoButtonColor = true, BorderSizePixel = 0,
+            TextSize = 13, TextScaled = false, Text = value, Active = true, Selectable = true, AutoButtonColor = false, BorderSizePixel = 0,
         }, parent), 9)
         if not primary then outline(item) end
         return item
@@ -283,6 +303,8 @@ local function buildView(uiContext)
         return field
     end
     local gui = object("ScreenGui", { Name = "RSZH_Hub", ResetOnSpawn = false, DisplayOrder = 10000, ZIndexBehavior = Enum.ZIndexBehavior.Sibling }, guiParent)
+    local protectFn = protectgui or (syn and syn.protect_gui)
+    if type(protectFn) == "function" then pcall(protectFn, gui) end
     uiContext.onCleanup(function() gui:Destroy() end)
     local viewport = object("Frame", {
         Name = "HubViewport", AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(0.5, 0, 0.5, -20),
@@ -328,13 +350,13 @@ local function buildView(uiContext)
     local tabCurrentBtn = rounded(object("TextButton", {
         Name = "TabCurrentGame", BackgroundColor3 = colors.accent, TextColor3 = colors.ink,
         Font = Enum.Font.GothamBold, TextSize = 13, TextScaled = false, Text = "当前游戏",
-        Selectable = true, AutoButtonColor = true, BorderSizePixel = 0,
+        Active = true, Selectable = true, AutoButtonColor = false, BorderSizePixel = 0, ZIndex = 6,
     }, panel), 9)
     local tabCurrentStroke = outline(tabCurrentBtn, colors.accent)
     local tabAllGamesBtn = rounded(object("TextButton", {
         Name = "TabAllGames", BackgroundColor3 = colors.surface, TextColor3 = colors.text,
         Font = Enum.Font.GothamBold, TextSize = 13, TextScaled = false, Text = "全部支持游戏",
-        Selectable = true, AutoButtonColor = true, BorderSizePixel = 0,
+        Active = true, Selectable = true, AutoButtonColor = false, BorderSizePixel = 0, ZIndex = 6,
     }, panel), 9)
     local tabAllGamesStroke = outline(tabAllGamesBtn, colors.border)
     local navCountLabel = text(panel, "GameNavCount", "1 款", 11, colors.muted)
@@ -357,7 +379,7 @@ local function buildView(uiContext)
     local backToGalleryBtn = rounded(object("TextButton", {
         Name = "BackToGallery", BackgroundColor3 = colors.surfaceElevated, TextColor3 = colors.accent,
         Font = Enum.Font.GothamMedium, TextSize = 11, TextScaled = false, Text = "← 全部游戏",
-        Selectable = true, AutoButtonColor = true, BorderSizePixel = 0, Visible = false, ZIndex = 5,
+        Active = true, Selectable = true, AutoButtonColor = false, BorderSizePixel = 0, Visible = false, ZIndex = 6,
     }, panel), 6)
     outline(backToGalleryBtn, colors.accent)
     local gamePlaceholder = rounded(text(panel, "CurrentGamePlaceholder", "游戏", 12, colors.muted), 9)
@@ -456,6 +478,7 @@ local function buildView(uiContext)
     end
     local function bindClick(btn, callback)
         local lastKind, lastAt = nil, -1
+        local pressStart = nil
         local function makeTrigger(kind)
             return function()
                 if not uiContext.alive or btn.Parent == nil then return end
@@ -465,9 +488,55 @@ local function buildView(uiContext)
                 callback()
             end
         end
+        local fireActivated = makeTrigger("activated")
+        local fireMouse = makeTrigger("mouse")
+        local fireUp = makeTrigger("up")
+        local fireInput = makeTrigger("input")
+        -- 防护：若执行器退回 PlayerGui 且游戏脚本试图向按钮注入 UIScale 实现点击缩小，立即移除该 UIScale
+        if btn.ChildAdded then
+            pcall(function()
+                btn.ChildAdded:Connect(function(child)
+                    if child and child.ClassName == "UIScale" then
+                        pcall(function() child:Destroy() end)
+                    end
+                end)
+            end)
+        end
         -- Native button signals disconnect on Destroy; do not retain replaced cards in UI cleanup.
-        btn.Activated:Connect(makeTrigger("activated"))
-        if btn.MouseButton1Click then btn.MouseButton1Click:Connect(makeTrigger("mouse")) end
+        btn.Activated:Connect(fireActivated)
+        if btn.MouseButton1Click then btn.MouseButton1Click:Connect(fireMouse) end
+        if btn.MouseButton1Up then
+            btn.MouseButton1Up:Connect(function()
+                if pressStart ~= nil then
+                    pressStart = nil
+                    fireUp()
+                end
+            end)
+        end
+        if btn.InputBegan then
+            btn.InputBegan:Connect(function(input)
+                if not input then return end
+                local t = input.UserInputType
+                if t == Enum.UserInputType.MouseButton1 or t == Enum.UserInputType.Touch then
+                    local pos = input.Position
+                    pressStart = pos and Vector2.new(pos.X, pos.Y) or Vector2.new(0, 0)
+                end
+            end)
+        end
+        if btn.InputEnded then
+            btn.InputEnded:Connect(function(input)
+                if not input or pressStart == nil then return end
+                local t = input.UserInputType
+                if t == Enum.UserInputType.MouseButton1 or t == Enum.UserInputType.Touch then
+                    local startPos = pressStart
+                    pressStart = nil
+                    local pos = input.Position
+                    if not pos or (Vector2.new(pos.X, pos.Y) - startPos).Magnitude <= 24 then
+                        fireInput()
+                    end
+                end
+            end)
+        end
     end
     bindClick(promptValidate, function()
         currentView.dismissAuthPrompt()
@@ -565,9 +634,13 @@ local function buildView(uiContext)
             local script = parts.script
             local playableHere = isScriptPlayableInHere(script)
             local canInteract = script.enabled and playableHere
+            card.Active = canInteract
             card.Selectable = canInteract
-            card.AutoButtonColor = canInteract
+            card.AutoButtonColor = false
             card.BackgroundColor3 = playableHere and colors.surface or colors.surfaceDisabled
+            local needsKey = script.requiresKey == true
+            parts.keyBadge.Text = Runtime.keyBadgeText(script)
+            parts.keyBadge.TextColor3 = not playableHere and colors.disabledText or (needsKey and colors.accent or colors.success)
             parts.title.TextColor3 = (script.enabled and playableHere) and colors.text or colors.disabledText
             parts.scenario.TextColor3 = playableHere and colors.muted or colors.disabledText
             parts.loadCount.Text = Runtime.loadCountText(getScriptLoadCount(script))
@@ -738,7 +811,7 @@ local function buildView(uiContext)
         local available = script.enabled and playableHere
         local card = rounded(object("TextButton", {
             Name = "ScriptCard_" .. script.id, LayoutOrder = sec.size, Size = UDim2.fromOffset(260, 188),
-            Text = script.nameZh, TextTransparency = 1, Selectable = available, AutoButtonColor = available,
+            Text = script.nameZh, TextTransparency = 1, Active = available, Selectable = available, AutoButtonColor = false,
             BackgroundColor3 = playableHere and colors.surface or colors.surfaceDisabled, BorderSizePixel = 0,
         }, sec.content), 12)
         card.ClipsDescendants = true
@@ -750,7 +823,16 @@ local function buildView(uiContext)
             }, card)
         end
         local categoryLabel = text(card, "Category", category, 11, playableHere and (not script.universal and colors.accent or colors.muted) or colors.disabledText)
-        categoryLabel.Position, categoryLabel.Size = UDim2.fromOffset(14, 10), UDim2.new(1, -28, 0, 16)
+        categoryLabel.Position, categoryLabel.Size = UDim2.fromOffset(14, 10), UDim2.new(1, -86, 0, 16)
+        local needsKey = script.requiresKey == true
+        local keyBadge = rounded(text(card, "KeyBadge", Runtime.keyBadgeText(script), 10, not playableHere and colors.disabledText or (needsKey and colors.accent or colors.success)), 5)
+        keyBadge.Font = Enum.Font.GothamMedium
+        keyBadge.BackgroundTransparency = 0
+        keyBadge.BackgroundColor3 = colors.surfaceElevated
+        keyBadge.TextXAlignment = Enum.TextXAlignment.Center
+        keyBadge.TextYAlignment = Enum.TextYAlignment.Center
+        keyBadge.TextWrapped = false
+        keyBadge.Position, keyBadge.Size = UDim2.new(1, -70, 0, 8), UDim2.fromOffset(58, 18)
         local title = text(card, "ScriptName", script.nameZh, 15, available and colors.text or colors.disabledText)
         title.Font = Enum.Font.GothamMedium
         local scenario = text(card, "Scenario", Runtime.scenario(script), 12, playableHere and colors.muted or colors.disabledText)
@@ -763,7 +845,7 @@ local function buildView(uiContext)
         bindClick(card, function()
             requestScript(script)
         end)
-        cardParts[card] = { title = title, scenario = scenario, loadCount = loadCount, action = action, script = script }
+        cardParts[card] = { title = title, scenario = scenario, loadCount = loadCount, action = action, keyBadge = keyBadge, script = script }
         table.insert(cards, card)
     end
 
@@ -837,11 +919,11 @@ local function buildView(uiContext)
             local btn = rounded(object("TextButton", {
                 Name = navName, LayoutOrder = idx, Size = UDim2.fromOffset(220, 112),
                 Text = grp.nameZh, TextTransparency = 1, ClipsDescendants = true,
-                BackgroundColor3 = colors.surface, BorderSizePixel = 0, Selectable = true, AutoButtonColor = true,
+                BackgroundColor3 = colors.surface, BorderSizePixel = 0, Active = true, Selectable = true, AutoButtonColor = false,
             }, gameCardsContainer), 12)
             local stroke = outline(btn)
             local bar = rounded(object("Frame", {
-                Name = "ActiveBar", BackgroundColor3 = colors.accent, BorderSizePixel = 0, Visible = grp.isCurrent,
+                Name = "ActiveBar", BackgroundColor3 = colors.accent, BorderSizePixel = 0, Visible = grp.isCurrent, Active = false, Selectable = false,
             }, btn), 2)
             local iconPh = rounded(text(btn, "NavIconPlaceholder", "游戏", 12, colors.muted), 9)
             iconPh.BackgroundTransparency, iconPh.BackgroundColor3 = 0, colors.surfaceElevated
