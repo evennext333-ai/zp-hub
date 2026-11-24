@@ -165,20 +165,20 @@ function Runtime.layout(availableWidth, availableHeight, count, universalCount, 
     availableWidth = math.max(1, tonumber(availableWidth) or 600)
     availableHeight = math.max(1, tonumber(availableHeight) or 560)
     local width = math.max(700, math.min(1040, availableWidth))
-    local height = math.max(396, math.min(720, availableHeight, math.floor(width * 0.7)))
+    local height = math.max(408, math.min(720, availableHeight, math.floor(width * 0.7)))
     local scale = math.min(1, availableWidth / width, availableHeight / height)
     count = math.max(0, tonumber(count) or 0)
     universalCount = math.max(0, tonumber(universalCount) or 0)
     gameNavCount = math.max(0, tonumber(gameNavCount) or 0)
     if showUniversal == nil then showUniversal = true end
     local compact = width < 900 or height < 580
-    local pad, gap, cardHeight = 20, 12, compact and 144 or 160
+    local pad, gap, cardHeight = 20, 12, compact and 136 or 156
     local left = compact and 220 or 256
     local mainWidth = width - left - pad
     local columns = 3
     local cellWidth = math.floor((mainWidth - 8 - gap * (columns - 1)) / columns)
     local function sectionHeight(items, showHeader)
-        local headerH = showHeader and 26 or 0
+        local headerH = showHeader and 24 or 0
         local sectionRows = math.ceil(math.max(0, tonumber(items) or 0) / columns)
         return headerH + (sectionRows > 0 and sectionRows * cardHeight + (sectionRows - 1) * gap + 4 or 44)
     end
@@ -203,7 +203,7 @@ function Runtime.layout(availableWidth, availableHeight, count, universalCount, 
         gridTop = gridTop, columns = columns, cellWidth = cellWidth,
         showCurrentHeader = showCurrentHeader, showUniversalSection = universalHeight > 0,
         gridContentHeight = gridContentHeight, currentHeight = currentHeight, universalHeight = universalHeight, footerY = footerY,
-        gridHeight = footerY - gridTop - 6,
+        gridHeight = compact and (height - gridTop - 10) or (footerY - gridTop - 6),
         gameCardHeight = gameCardHeight, galleryTop = galleryTop, galleryHeight = galleryHeight,
         galleryContentHeight = galleryContentHeight }
 end

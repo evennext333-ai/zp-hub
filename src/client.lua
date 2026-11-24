@@ -311,7 +311,7 @@ local function buildView(uiContext)
     -- The workspace stays horizontal; main stage switches between Current/Game Detail and All Games Gallery.
     local panel = rounded(object("Frame", {
         Name = "HubWindow", AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
-        Size = UDim2.fromOffset(700, 396), BackgroundColor3 = colors.canvas, BorderSizePixel = 0,
+        Size = UDim2.fromOffset(700, 408), BackgroundColor3 = colors.canvas, BorderSizePixel = 0,
         ClipsDescendants = true, Visible = true,
     }, viewport), 16)
     outline(panel)
@@ -657,10 +657,16 @@ local function buildView(uiContext)
             if not playableHere then
                 parts.action.Text = "非当前游戏"
                 parts.action.TextColor3 = colors.disabledText
+                parts.action.BackgroundColor3 = colors.surfaceElevated
+                parts.actionStroke.Color = colors.border
             else
-                parts.action.Text = not script.enabled and "待上架" or (scriptStarted and (activeScriptId == script.id and "运行中" or "重新进入后切换")
-                    or (loading and loadingScriptId == script.id and "正在加载…" or (notGranted(script) and "需匹配权益" or (verified and "加载  →" or "校验后加载"))))
-                parts.action.TextColor3 = (not script.enabled or notGranted(script) or (scriptStarted and activeScriptId ~= script.id)) and colors.muted or colors.accent
+                local isBlocked = not script.enabled or notGranted(script) or (scriptStarted and activeScriptId ~= script.id)
+                local isRunning = scriptStarted and activeScriptId == script.id
+                parts.action.Text = not script.enabled and "待上架" or (scriptStarted and (isRunning and "运行中" or "重新进入后切换")
+                    or (loading and loadingScriptId == script.id and "正在加载…" or (notGranted(script) and "需匹配权益" or (verified and "▶ 点击加载" or "🔑 校验后加载"))))
+                parts.action.TextColor3 = isBlocked and colors.muted or (isRunning and colors.success or colors.accent)
+                parts.action.BackgroundColor3 = colors.surfaceElevated
+                parts.actionStroke.Color = isBlocked and colors.border or (isRunning and colors.success or colors.accent)
             end
         end
     end
@@ -758,10 +764,10 @@ local function buildView(uiContext)
         for index, sec in ipairs({currentSection, universalSection}) do
             local height = index == 1 and layout.currentHeight or layout.universalHeight
             local showHeader = index == 1 and layout.showCurrentHeader or true
-            local contentTop = showHeader and 26 or 0
+            local contentTop = showHeader and 24 or 0
             place(sec.root, 0, index == 1 and 0 or layout.currentHeight + 12, layout.mainWidth - 4, height)
-            place(sec.title, 0, 0, layout.mainWidth - 100, 20)
-            place(sec.count, layout.mainWidth - 96, 0, 88, 20)
+            place(sec.title, 0, 0, layout.mainWidth - 100, 18)
+            place(sec.count, layout.mainWidth - 96, 0, 88, 18)
             sec.title.Visible = showHeader
             sec.count.Visible = showHeader
             place(sec.content, 0, contentTop, layout.mainWidth - 4, math.max(0, height - contentTop))
@@ -773,14 +779,16 @@ local function buildView(uiContext)
         end
         for _, card in ipairs(cards) do
             local parts = cardParts[card]
-            parts.title.Position = UDim2.fromOffset(14, layout.compact and 32 or 34)
-            parts.title.Size = UDim2.new(1, -28, 0, layout.compact and 32 or 36)
-            parts.scenario.Position = UDim2.fromOffset(14, layout.compact and 68 or 74)
-            parts.scenario.Size = UDim2.new(1, -28, 0, 28)
-            parts.loadCount.Position = UDim2.fromOffset(14, layout.cardHeight - 32)
-            parts.loadCount.Size = UDim2.new(0.5, -16, 0, 22)
-            parts.action.Position = UDim2.new(0.5, 2, 0, layout.cardHeight - 32)
-            parts.action.Size = UDim2.new(0.5, -16, 0, 22)
+            local c = layout.compact
+            parts.title.Position = UDim2.fromOffset(12, c and 28 or 32)
+            parts.title.Size = UDim2.new(1, -24, 0, c and 30 or 34)
+            parts.scenario.Position = UDim2.fromOffset(12, c and 60 or 68)
+            parts.scenario.Size = UDim2.new(1, -24, 0, c and 18 or 24)
+            parts.loadCount.Position = UDim2.fromOffset(12, c and 80 or 94)
+            parts.loadCount.Size = UDim2.new(1, -24, 0, 16)
+            local btnH = c and 28 or 32
+            parts.action.Position = UDim2.fromOffset(12, layout.cardHeight - btnH - 8)
+            parts.action.Size = UDim2.new(1, -24, 0, btnH)
         end
         list.CanvasSize = UDim2.fromOffset(0, layout.gridContentHeight)
         list.ScrollingEnabled = true
@@ -854,13 +862,18 @@ local function buildView(uiContext)
         local loadCount = text(card, "LoadCount", Runtime.loadCountText(getScriptLoadCount(script)), 11, playableHere and colors.muted or colors.disabledText)
         loadCount.TextYAlignment = Enum.TextYAlignment.Center
         loadCount.TextWrapped = false
-        local action = text(card, "CardAction", available and "加载  →" or (not playableHere and "非当前游戏" or "待上架"), 12, available and colors.accent or colors.disabledText)
+        local action = rounded(text(card, "CardAction", available and "▶ 点击加载" or (not playableHere and "非当前游戏" or "待上架"), 12, available and colors.accent or colors.disabledText), 7)
+        action.Font = Enum.Font.GothamBold
+        action.BackgroundTransparency = 0
+        action.BackgroundColor3 = colors.surfaceElevated
         action.TextYAlignment = Enum.TextYAlignment.Center
-        action.TextXAlignment = Enum.TextXAlignment.Right
+        action.TextXAlignment = Enum.TextXAlignment.Center
+        action.TextWrapped = false
+        local actionStroke = outline(action, available and colors.accent or colors.border)
         bindClick(card, function()
             requestScript(script)
         end)
-        cardParts[card] = { title = title, scenario = scenario, loadCount = loadCount, action = action, keyBadge = keyBadge, script = script }
+        cardParts[card] = { title = title, scenario = scenario, loadCount = loadCount, action = action, actionStroke = actionStroke, keyBadge = keyBadge, script = script }
         table.insert(cards, card)
     end
 

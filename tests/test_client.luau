@@ -807,6 +807,9 @@ check("分区滚动高度和跨设备授权信息不重叠",function()
         assert(auth.Position.Y.Offset+auth.Size.Y.Offset<stop.Position.Y.Offset,"左侧授权卡片与底部结束本局按钮不重叠")
         local collapse,tabCur=f.byName("CollapseView"),f.byName("TabCurrentGame")
         assert(collapse.Position.Y.Offset+collapse.Size.Y.Offset+8<=tabCur.Position.Y.Offset,"顶部收起按钮与下方导航栏保持至少 8px 间距")
+        local grid=f.byName("ScriptGrid")
+        local firstRowRequired=(f.byName("CurrentTitle").Visible and 24 or 0)+f.byName("CurrentCardLayout").CellSize.Y.Offset
+        assert(grid.Size.Y.Offset>=firstRowRequired,"带通用脚本分区的混排模式下首排脚本卡片也须 100% 完整展示")
     end
 end)
 check("空目录、旧 API 缺少场景与长文本均有稳定布局",function()
