@@ -66,16 +66,84 @@ function Runtime.search(scripts, query, universeId, placeId)
     return result
 end
 
+-- 格式化脚本执行次数展示
+function Runtime.loadCountText(count)
+    local n = math.max(0, math.floor(tonumber(count) or 0))
+    return "已执行 " .. tostring(n) .. " 次"
+end
+
+-- 提取支持的游戏总列表，以及当前游戏的专属与通用脚本分组
+function Runtime.gameGroups(scripts, universeId, placeId)
+    local currentGame = Runtime.currentGame(scripts, universeId, placeId)
+    local currentGid = currentGame and currentGame.id or nil
+    local currentScripts, universalScripts = {}, {}
+    local byGame, order = {}, {}
+    local sorted = Runtime.search(scripts or {}, "", universeId, placeId)
+    for _, script in ipairs(sorted) do
+        local rank = Runtime.rank(script, universeId, placeId)
+        if script.universal then
+            table.insert(universalScripts, script)
+        elseif rank == 0 then
+            if not currentGid and type(script.gameId) == "string" and script.gameId ~= "" then
+                currentGid = script.gameId
+            end
+            table.insert(currentScripts, script)
+        end
+    end
+    for _, script in ipairs(sorted) do
+        local rank = Runtime.rank(script, universeId, placeId)
+        if not script.universal and rank > 0 then
+            local gid = tostring(script.gameId or (type(script.game) == "table" and script.game.id) or "other")
+            local group = byGame[gid]
+            if not group then
+                local g = type(script.game) == "table" and script.game or {}
+                local uId = type(script.universeIds) == "table" and tonumber(script.universeIds[1]) or nil
+                group = {
+                    key = "game:" .. gid,
+                    gameId = gid,
+                    nameZh = (type(g.nameZh) == "string" and g.nameZh ~= "" and g.nameZh) or gid,
+                    nameEn = (type(g.nameEn) == "string" and g.nameEn ~= "" and g.nameEn) or "英文名称未配置",
+                    universeId = uId,
+                    isCurrent = false,
+                    scripts = {},
+                }
+                byGame[gid] = group
+                table.insert(order, group)
+            end
+            table.insert(group.scripts, script)
+        end
+    end
+    table.sort(order, function(a, b) return tostring(a.gameId) < tostring(b.gameId) end)
+    local currentEntry = {
+        key = "current",
+        gameId = currentGid,
+        nameZh = (currentGame and type(currentGame.nameZh) == "string" and currentGame.nameZh ~= "" and currentGame.nameZh) or "当前游戏",
+        nameEn = currentGame and ((type(currentGame.nameEn) == "string" and currentGame.nameEn ~= "" and currentGame.nameEn) or "英文名称未配置") or "游戏资料待同步",
+        universeId = tonumber(universeId) or 0,
+        isCurrent = true,
+        scripts = currentScripts,
+        universalScripts = universalScripts,
+    }
+    local list = { currentEntry }
+    for _, group in ipairs(order) do
+        table.insert(list, group)
+    end
+    return list, currentEntry
+end
+
 -- One horizontal workspace on every device; undersized viewports scale it as a unit.
-function Runtime.layout(availableWidth, availableHeight, count, universalCount)
+function Runtime.layout(availableWidth, availableHeight, count, universalCount, gameNavCount, showUniversal)
     availableWidth = math.max(1, tonumber(availableWidth) or 600)
     availableHeight = math.max(1, tonumber(availableHeight) or 560)
     local width = math.max(700, math.min(1040, availableWidth))
     local height = math.max(340, math.min(720, availableHeight, math.floor(width * 0.7)))
     local scale = math.min(1, availableWidth / width, availableHeight / height)
     count = math.max(0, tonumber(count) or 0)
+    universalCount = math.max(0, tonumber(universalCount) or 0)
+    gameNavCount = math.max(1, tonumber(gameNavCount) or 1)
+    if showUniversal == nil then showUniversal = true end
     local compact = width < 900 or height < 580
-    local pad, gap, cardHeight = 20, 12, compact and 144 or 156
+    local pad, gap, cardHeight = 20, 12, compact and 148 or 160
     local left = compact and 220 or 256
     local mainWidth = width - left - pad
     local columns = 3
@@ -84,15 +152,22 @@ function Runtime.layout(availableWidth, availableHeight, count, universalCount)
         local sectionRows = math.ceil(math.max(0, tonumber(items) or 0) / columns)
         return 32 + (sectionRows > 0 and sectionRows * cardHeight + (sectionRows - 1) * gap + 4 or 44)
     end
-    local currentHeight, universalHeight = sectionHeight(count), sectionHeight(universalCount)
-    local gridContentHeight = currentHeight + 16 + universalHeight
-    local mainTop = compact and 64 or 80
-    local gridTop, footerY = mainTop + 72, height - 62
+    local currentHeight = sectionHeight(count)
+    local universalHeight = showUniversal and sectionHeight(universalCount) or 0
+    local gridContentHeight = showUniversal and (currentHeight + 16 + universalHeight) or currentHeight
+    local mainTop = compact and 64 or 76
+    local detailHeight = compact and 68 or 76
+    local gridTop = mainTop + detailHeight + 8
+    local footerY = height - 56
+    local navItemHeight = compact and 42 or 46
+    local navGap = 6
+    local navContentHeight = gameNavCount * navItemHeight + math.max(0, gameNavCount - 1) * navGap
     return { width = width, height = height, scale = scale, pad = pad, gap = gap,
         cardHeight = cardHeight, compact = compact, left = left, mainWidth = mainWidth,
-        mainTop = mainTop, gridTop = gridTop, columns = columns, cellWidth = cellWidth,
+        mainTop = mainTop, detailHeight = detailHeight, gridTop = gridTop, columns = columns, cellWidth = cellWidth,
         gridContentHeight = gridContentHeight, currentHeight = currentHeight, universalHeight = universalHeight, footerY = footerY,
-        gridHeight = compact and height - gridTop - 20 or footerY - gridTop - 14 }
+        gridHeight = compact and height - gridTop - 16 or footerY - gridTop - 12,
+        navItemHeight = navItemHeight, navGap = navGap, navContentHeight = navContentHeight }
 end
 
 function Runtime.scenario(script)

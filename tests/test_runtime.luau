@@ -58,6 +58,17 @@ for _,screen in ipairs({{1040,720,3},{962,691,3},{793,351,3},{627,337,3},{640,30
 end
 assert(Runtime.scenario({scenario="  "}) == "未设置场景")
 assert(Runtime.scenario({shortDescription="不要展示简介"}) == "场景信息待接口同步")
+assert(Runtime.loadCountText(nil) == "已执行 0 次")
+assert(Runtime.loadCountText(15) == "已执行 15 次")
+assert(Runtime.loadCountText(-3) == "已执行 0 次")
+local groups, currentGroup = Runtime.gameGroups({
+    {id="other-1", gameId="beta", nameZh="Beta脚本", nameEn="Beta", placeIds={}, universeIds={99}, game={id="beta", nameZh="其他游戏Beta", nameEn="Beta Game"}},
+    {id="uni-1", gameId="common", nameZh="通用1", nameEn="Uni1", universal=true, placeIds={}, universeIds={}},
+    {id="cur-1", gameId="alpha", nameZh="当前1", nameEn="Cur1", placeIds={10}, universeIds={1}, game={id="alpha", nameZh="当前游戏Alpha", nameEn="Alpha Game"}},
+}, 1, 10)
+assert(#groups == 2 and groups[1] == currentGroup and currentGroup.isCurrent)
+assert(currentGroup.nameZh == "当前游戏Alpha" and #currentGroup.scripts == 1 and #currentGroup.universalScripts == 1)
+assert(groups[2].gameId == "beta" and not groups[2].isCurrent and groups[2].nameZh == "其他游戏Beta" and #groups[2].scripts == 1)
 local client = fs.readFile("src/client.lua")
 assert(luau.load("local API='https://TARGET'; local Runtime={};\n" .. client))
 print("通过：生命周期、清理异常、晚到资源、搜索排序、租约及 Lua 编译")

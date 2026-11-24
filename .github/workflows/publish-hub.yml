@@ -107,7 +107,7 @@ jobs:
 
   publish:
     needs: build
-    if: github.repository == 'evennext333-ai/zp-hub'
+    if: github.repository == 'evennext333-ai/zs-hub'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
@@ -120,7 +120,7 @@ jobs:
       - name: Publish versioned release assets
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_REPO: evennext333-ai/zp-hub
+          GH_REPO: evennext333-ai/zs-hub
           RELEASE_TAG: ${{ needs.build.outputs.tag }}
           SOURCE_REPOSITORY: ${{ github.repository }}
           SOURCE_SHA: ${{ needs.build.outputs.source_sha }}
@@ -130,5 +130,5 @@ jobs:
           sha256sum -c SHA256SUMS
           gh release create "$RELEASE_TAG" loader.lua NOTICE.txt SHA256SUMS \
             --verify-tag --target "$SOURCE_SHA" --title "$RELEASE_TAG" --draft \
-            --notes "Public obfuscated Hub only. Source: https://github.com/$SOURCE_REPOSITORY/tree/$SOURCE_SHA . Loader: https://github.com/evennext333-ai/zp-hub/releases/latest/download/loader.lua . Game scripts are served by the existing script hall API after authorization. API: https://www.zldelf.cloud/api. See NOTICE.txt for attribution."
+            --notes "Public obfuscated Hub only. Source: https://github.com/$SOURCE_REPOSITORY/tree/$SOURCE_SHA . Loader: https://github.com/evennext333-ai/zs-hub/releases/latest/download/loader.lua . Game scripts are served by the existing script hall API after authorization. API: https://www.zldelf.cloud/api. See NOTICE.txt for attribution."
           gh release edit "$RELEASE_TAG" --draft=false --latest

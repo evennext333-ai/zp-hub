@@ -261,6 +261,16 @@ if process.env.HUB_UI_PREVIEW_DIR then
     end)
 end
 
+check("登录浏览心跳恢复都不预取正文，仅显式点击后加载一次",function()
+    local f=fixture({kind="MEMBER"})
+    assert(f.counter.logins==1 and f.counter.loads==0 and #f.counter.sources==0 and f.counter.starts==0)
+    f.resize(793,311);f.click("收起");f.byName("ToggleHub").Activated:Fire()
+    f.close();f.client();untilTrue(function()return f.counter.heartbeats>=1 end)
+    assert(f.counter.loads==0 and #f.counter.sources==0 and f.counter.starts==0)
+    f.play();untilTrue(function()return f.counter.starts==1 end)
+    assert(f.counter.loads==1 and f.counter.sources[1]==originalSource)
+    f.play();task.wait(0.03);assert(f.counter.loads==1 and f.counter.starts==1)
+end)
 check("外部 Key 自动校验且不自动启动脚本",function()
     local f=fixture()
     untilTrue(function()return f.counter.logins==1 and f.byName("SessionStatus").Text:find("授权有效",1,true)end)
@@ -796,6 +806,48 @@ check("缺少结束游戏能力时不加载",function()
 end)
 check("旧策略单例要求重新进入游戏",function()
     local f=fixture({legacyHub=true});assert(f.counter.logins==0 and f.counter.loads==0)
+end)
+check("支持游戏总列表切换、非当前游戏置灰禁加载与执行次数累加",function()
+    local scripts={
+        {id="hall-7",gameId="demo",nameZh="当前游戏工具",nameEn="Current",enabled=true,universal=false,placeIds={2},universeIds={1},scenario="当前场景",loadCount=10,
+            game={id="demo",nameZh="当前测试游戏",nameEn="Current Game"}},
+        {id="hall-8",gameId="other",nameZh="其他游戏工具",nameEn="Other",enabled=true,universal=false,placeIds={99},universeIds={88},scenario="其他场景",loadCount=42,
+            game={id="other",nameZh="其他支持游戏",nameEn="Other Supported Game"}},
+        {id="hall-9",gameId="common",nameZh="通用辅助工具",nameEn="Common",enabled=true,universal=true,placeIds={},universeIds={},scenario="通用场景",loadCount=5},
+    }
+    local f=fixture({catalog=scripts,kind="MEMBER"})
+    assert(f.byName("GameNavCount").Text=="2 款")
+    assert(f.byName("LibraryTitle").Text=="当前测试游戏" and f.byName("GameMatchBadge").Text=="当前游戏")
+    local function cardPart(cardId,partName)
+        local card=f.byName("ScriptCard_"..cardId)
+        for _,o in ipairs(f.objects)do if not o.destroyed and o.Parent==card and o.Name==partName then return o end end
+        error("卡片子控件缺失："..cardId.."."..partName)
+    end
+    assert(cardPart("hall-7","LoadCount").Text=="已执行 10 次")
+    assert(cardPart("hall-9","LoadCount").Text=="已执行 5 次")
+    -- 切换到左侧支持游戏总列表中的其他游戏
+    f.byName("GameNav_other").Activated:Fire()
+    assert(f.byName("LibraryTitle").Text=="其他支持游戏" and f.byName("CurrentGameNameEn").Text=="Other Supported Game")
+    assert(f.byName("GameMatchBadge").Text=="非当前游戏")
+    assert(f.byName("CurrentGameImage").Image=="rbxthumb://type=GameIcon&id=88&w=150&h=150")
+    assert(not f.byName("UniversalSection").Visible,"浏览其他专属游戏时隐藏通用分区")
+    local otherCard=f.byName("ScriptCard_hall-8")
+    assert(not otherCard.Selectable and not otherCard.AutoButtonColor,"非当前游戏卡片置灰禁用交互高亮")
+    assert(cardPart("hall-8","CardAction").Text=="非当前游戏")
+    assert(cardPart("hall-8","LoadCount").Text=="已执行 42 次")
+    -- 点击非当前游戏卡片不会触发加载或编译
+    otherCard.Activated:Fire();task.wait(0.03)
+    assert(f.counter.loads==0 and f.counter.starts==0 and #f.counter.kicks==0)
+    assert(cardPart("hall-8","LoadCount").Text=="已执行 42 次")
+    -- 切回当前游戏并执行加载，验证执行次数 +1
+    f.byName("GameNav_current").Activated:Fire()
+    assert(f.byName("LibraryTitle").Text=="当前测试游戏" and f.byName("UniversalSection").Visible)
+    f.byName("ScriptCard_hall-7").Activated:Fire()
+    untilTrue(function()return f.counter.starts==1 end)
+    assert(cardPart("hall-7","LoadCount").Text=="已执行 11 次")
+    -- 销毁并恢复界面后保留递增后的执行次数
+    f.destroy();f.client()
+    assert(cardPart("hall-7","LoadCount").Text=="已执行 11 次")
 end)
 print("通过："..passed.." 项界面/监控解耦、原样加载、授权失效断开与竞态回归；Kick 为本地替身")
 

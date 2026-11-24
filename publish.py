@@ -10,7 +10,7 @@ from pathlib import Path
 from build import DEFAULT_API_URL, PROMETHEUS_COMMIT, api_url, build
 
 PUBLIC_FILES = {"loader.lua", "NOTICE.txt", "SHA256SUMS"}
-LOADER_URL = "https://github.com/evennext333-ai/zp-hub/releases/latest/download/loader.lua"
+LOADER_URL = "https://github.com/evennext333-ai/zs-hub/releases/latest/download/loader.lua"
 
 
 def prepare(api, output, prometheus_dir, lua="lua5.1"):

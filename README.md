@@ -1,12 +1,14 @@
-# zp-hub
+# zs-hub
 
 独立的 Hub 客户端与公共资源构建仓库。界面、游戏识别分区、Key 会话客户端、Key 操作页、混淆与 GitHub 发布在此维护；不包含游戏脚本、会员数据库或授权后端，也不依赖相邻源码仓库。
+
+GitHub 仓库已更名为 `evennext333-ai/zs-hub`；本地源码目录、服务器公共资源目录及内部协议标识继续保留原路径/名称，不以仓库更名触发数据迁移。后续发布使用新仓库及加载地址，历史 Release 不重写。
 
 ## 仓库边界
 
 | 仓库 | 职责 |
 | --- | --- |
-| zp-hub | 公共客户端、公共资源包、客户端测试和混淆发布 |
+| zs-hub（本地目录 zp-hub） | 公共客户端、公共资源包、客户端测试和混淆发布 |
 | r-s-zh | 可选游戏源码维护，与 Hub 构建及运行无依赖 |
 | zp-sprite-backend | 原脚本大厅数据源与 Hub 配置、会员、Key、HWID 会话及鉴权分发 |
 
@@ -19,7 +21,7 @@ API 继续使用 `https://www.zldelf.cloud/api`，请求路径、Key 格式和�
 - `VERSION`：Hub 自身版本，独立于脚本大厅记录版本。
 - `build.py`：仅生成公共资源及校验元数据。
 - `publish.py`：仅生成 GitHub 三个公开附件。
-- `.github/workflows/publish-hub.yml`：本仓库构建并发布到 evennext333-ai/zp-hub。
+- `.github/workflows/publish-hub.yml`：本仓库构建并发布到 evennext333-ai/zs-hub。
 
 ## 本地验证
 
@@ -43,7 +45,7 @@ Key 页请求头回归测试在本地与 CI 直接运行；真实 API 的 DOM �
 
 ```sh
 python3 /Users/lvjunling/work_space/flutter/persor/zp-hub/build.py \
-  --output /tmp/zp-hub-assets-1.4.0
+  --output /tmp/zp-hub-assets-1.4.1
 ```
 
 默认 API 是 `https://www.zldelf.cloud/api`，也可显式传 `--api-url`；根地址与 `/api` 前缀都支持，不生成重复 `/api/api`。
@@ -56,8 +58,8 @@ python3 /Users/lvjunling/work_space/flutter/persor/zp-hub/build.py \
 python3 /Users/lvjunling/work_space/flutter/persor/zp-hub/build.py \
   --prometheus-dir /tmp/prometheus \
   --lua-bin lua5.1 \
-  --output /tmp/zp-hub-assets-obfuscated-1.4.0
-HUB_TEST_LOADER=/tmp/zp-hub-assets-obfuscated-1.4.0/loader.lua \
+  --output /tmp/zp-hub-assets-obfuscated-1.4.1
+HUB_TEST_LOADER=/tmp/zp-hub-assets-obfuscated-1.4.1/loader.lua \
   lune run /Users/lvjunling/work_space/flutter/persor/zp-hub/tests/test_client.luau
 ```
 
@@ -103,11 +105,20 @@ HUB_TEST_LOADER=/tmp/zp-hub-assets-obfuscated-1.4.0/loader.lua \
 5. 已登录且未运行脚本时分别关闭、销毁、收起 UI，模拟顶号和会员/Key 到期，仍只触发一次 Kick；运行脚本后和持续断网下也复核。真实 Kick 在测试中使用替身。
 6. PC/平板/横屏手机检查三列、分区滚动、空区、长文本、拖动边界、输入/状态/结束按钮的空间；预览仅合成数据，实际执行器和设备须另行验收。
 
+## 全部脚本浏览（设计，尚未实现）
+
+- 主界面默认保持「当前游戏优先」：当前游戏区在首屏，通用脚本在下方，不把所有其他游戏卡片插在这两个区域之前。
+- 标题右侧增加低强调「全部脚本（N）」入口，打开独立浏览页；返回按钮回到当前游戏页并保留滚动位置、授权与已启动状态，不创建新授权控制器。
+- 浏览页按游戏分组，顶部固定当前游戏分组，其次通用，再列其他游戏；每组展示游戏图片、中英文名、脚本数量，展开后展示名称和 scenario 的三列卡片。搜索仅放在此浏览页，不恢复主界面的工具栏。
+- 当前匹配且有权限的项目可点击加载；未校验先弹窗，未授权提示权益，其他游戏项目仅展示「进入对应游戏后使用」，不为浏览发起脚本下载。单局仍只启动一份原脚本，切换须重新进入游戏。
+- 「全部」仅指当前 API 中已发布且 Hub 已启用的目录项，不等于大厅全部记录，不自动上架、启用待验收脚本或暴力区。
+- 目录、登录、心跳、展开分组、图片加载、搜索、收起和恢复界面都只读元数据；只有用户明确点击可加载项且服务端验证通过，加载接口才返回正文。浏览页不会内嵌、预取、缓存或按源地址直接抓取脚本正文。
+
 ## Key 校验与卡片点击
 
 ```lua
 getgenv().HUB_KEY = "KEY"
-loadstring(game:HttpGet("https://github.com/evennext333-ai/zp-hub/releases/latest/download/loader.lua"))()
+loadstring(game:HttpGet("https://github.com/evennext333-ai/zs-hub/releases/latest/download/loader.lua"))()
 ```
 
 - `hub-v1.2.2` 起，首次加载会自动校验外部 `HUB_KEY`，但不自动启动任何脚本；看到「授权有效」后点击卡片加载。Key 读取后立即从外部环境清理，界面不回填完整 Key，日志不输出 Key。
@@ -146,7 +157,7 @@ Hub 的目录和脚本内容直接来自后端原脚本大厅数据库，不读�
 ```dotenv
 HUB_ENABLED=true
 HUB_SECRET=<保留现有至少32字节的密钥>
-HUB_PUBLIC_DIR=/srv/zp-hub/public/1.4.0
+HUB_PUBLIC_DIR=/srv/zp-hub/public/1.4.1
 ```
 
 `HUB_PUBLIC_DIR` 只包含本仓库四个公共资源和 `hub.json`；没有游戏脚本或游戏目录清单。后端校验公共文件大小、路径和摘要后托管。只更新公共客户端时切换此目录并重启或滚动发布；修改脚本大厅内容与状态无需重启或重新构建 Hub。
@@ -157,16 +168,16 @@ Docker 在原生产配置上叠加后端 `/Users/lvjunling/work_space/flutter/pe
 
 ## GitHub 发布到 zp-hub
 
-源码、标签和 Release 统一在 `evennext333-ai/zp-hub`，主加载地址为：
+源码、标签和 Release 统一在 `evennext333-ai/zs-hub`，主加载地址为：
 
 ```text
-https://github.com/evennext333-ai/zp-hub/releases/latest/download/loader.lua
+https://github.com/evennext333-ai/zs-hub/releases/latest/download/loader.lua
 ```
 
-1. 远端使用 `git@github.com:evennext333-ai/zp-hub.git`，主分支为 `main`。推送已审查的源码和工作流后，再推送版本标签触发发布；仅推送 `main` 不会创建 Release，文档地址不是已上线的证明。
+1. 远端使用 `git@github.com:evennext333-ai/zs-hub.git`，主分支为 `main`。推送已审查的源码和工作流后，再推送版本标签触发发布；仅推送 `main` 不会创建 Release，文档地址不是已上线的证明。
 2. 主入口供 `game:HttpGet` 匿名访问，发布仓库须公开。公开仓库也会公开明文源码及历史；混淆 Release 附件不隐藏源码。私有仓库的 Release 需要认证，不适合作为这个公开加载入口。发布前先确认源码公开策略。
-3. 不再使用跨仓库 PAT 或 `HUB_RELEASE_TOKEN`。构建任务保持 `contents: read`；只有发布任务使用内置 `GITHUB_TOKEN` 和 `contents: write`。发布任务限定在 `evennext333-ai/zp-hub`，其他仓库和 fork 只构建。[GitHub 内置令牌与权限说明](https://docs.github.com/en/actions/tutorials/authenticate-with-github_token)
-4. 检查 `VERSION`，在本仓库创建并推送匹配标签，例如版本 `1.4.0` 对应 `hub-v1.4.0`；也可手动指定已存在的匹配标签。工作流显式检出标签而非默认分支。
+3. 不再使用跨仓库 PAT 或 `HUB_RELEASE_TOKEN`。构建任务保持 `contents: read`；只有发布任务使用内置 `GITHUB_TOKEN` 和 `contents: write`。发布任务限定在 `evennext333-ai/zs-hub`，其他仓库和 fork 只构建。[GitHub 内置令牌与权限说明](https://docs.github.com/en/actions/tutorials/authenticate-with-github_token)
+4. 检查 `VERSION`，在本仓库创建并推送匹配标签，例如版本 `1.4.1` 对应 `hub-v1.4.1`；也可手动指定已存在的匹配标签。工作流显式检出标签而非默认分支。
 5. 测试与混淆完成后，构建任务输出 `hub-server-assets`（四个公共资源和 hub.json，供 Key 页部署及旧后端加载链接兼容）和 `hub-public`（`loader.lua`、`NOTICE.txt`、`SHA256SUMS`）。两份混淆加载器逐字节一致。
 6. 发布任务校验附件白名单与 SHA256，在同一仓库要求标签已经存在，以实际构建提交为来源创建草稿，附件上传成功后才公开并标记为 latest。已存在的 Release 不覆盖，失败后检查草稿和产物，处理后再运行。[GitHub CLI 标签校验说明](https://cli.github.com/manual/gh_release_create)
 
@@ -176,12 +187,12 @@ https://github.com/evennext333-ai/zp-hub/releases/latest/download/loader.lua
 
 ```lua
 getgenv().HUB_KEY = "KEY"
-loadstring(game:HttpGet("https://github.com/evennext333-ai/zp-hub/releases/latest/download/loader.lua"))()
+loadstring(game:HttpGet("https://github.com/evennext333-ai/zs-hub/releases/latest/download/loader.lua"))()
 ```
 
 运行流程：GitHub 下载并启动公共 Hub → 请求 `https://www.zldelf.cloud/api` 获取目录、校验 Key 和加载脚本。脚本正文继续复用现有大厅数据库，不从 GitHub 下载游戏源码。
 
-- 国内、海外唯一推荐加载入口：`https://github.com/evennext333-ai/zp-hub/releases/latest/download/loader.lua`。不按地区切换加载器域名。
+- 国内、海外唯一推荐加载入口：`https://github.com/evennext333-ai/zs-hub/releases/latest/download/loader.lua`。不按地区切换加载器域名。
 - API：`https://www.zldelf.cloud/api`，运行接口仍为 `/api/hub/*`。
 - Key 页面：`https://www.zldelf.cloud/api/hub/keys`。
 - 旧后端加载链接仅保留兼容，不再作为国内入口分发；现有 API 路由不删除。
@@ -217,7 +228,7 @@ Hub 不再携带默认游戏清单或验证脚本包。普通大厅脚本默认�
 HUB_UI_PREVIEW_DIR=/tmp/zp-hub-ui-scenes lune run tests/test_client.luau
 ```
 
-当前构建版本为 `1.4.0`。本地构建不自动推送、部署或创建 GitHub Release；本轮发布 Hub 并同步目录展示字段，原 API 路径、授权与加载入口保持不变。已运行旧 UI 的游戏实例继续使用旧视图，重新进入游戏后再加载新版；不为界面升级打断现有授权会话。
+当前本地构建版本为 `1.4.1`（入口更名候选，尚未发布）。本地构建不自动推送、部署或创建 GitHub Release；本轮只进行入口更名和按需加载的本地验证，未提交推送或部署；业务 API 与授权规则保持不变。已运行旧 UI 的游戏实例继续使用旧视图，重新进入游戏后再加载新版；不为界面升级打断现有授权会话。
 
 
 ### 真实界面显示回归

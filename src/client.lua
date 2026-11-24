@@ -28,6 +28,8 @@ local endSession, login, run, mountUI
 local view, mountingUI = nil, false
 local statusMessage = "正在获取正式目录…"
 local catalog = {}
+local loadCounts = {}
+local selectedGroupKey = "current"
 local entitlement, activeScriptId, loadingScriptId = nil, nil, nil
 local errors = {
     HUB_KEY_INVALID = "Key 无效或已重置", HUB_LICENSE_REVOKED = "权益已吊销",
@@ -43,6 +45,12 @@ local authorizationErrors = {
     HUB_LICENSE_EXPIRED = true, HUB_VIP_REQUIRED = true, HUB_SESSION_REPLACED = true,
     HUB_SESSION_EXPIRED = true, HUB_SESSION_INVALID = true,
 }
+
+local function getScriptLoadCount(script)
+    local tracked = loadCounts[script.id]
+    if tracked ~= nil then return tracked end
+    return math.max(0, math.floor(tonumber(script.loadCount) or 0))
+end
 
 local function refreshView()
     if view and view.context.alive then
@@ -177,6 +185,14 @@ run = function(script)
         else setStatus("加载失败：" .. errorText(err or "INVALID_RESPONSE")) end
         return
     end
+    local nextCount = tonumber(data.loadCount)
+    if nextCount and nextCount >= 0 then
+        loadCounts[script.id] = math.floor(nextCount)
+    else
+        loadCounts[script.id] = getScriptLoadCount(script) + 1
+    end
+    script.loadCount = loadCounts[script.id]
+    refreshView()
     local compiled, fn = pcall(loadstring, data.source, "=Hub/" .. script.id)
     if not owner.alive then loading = false return end
     if os.clock() >= leaseUntil then terminate("运行租约已到期") loading = false return end
@@ -216,17 +232,19 @@ local function buildView(uiContext)
     end
     local colors = {
         canvas = Color3.fromRGB(15, 18, 25), surface = Color3.fromRGB(24, 29, 39),
+        surfaceElevated = Color3.fromRGB(30, 36, 48), surfaceDisabled = Color3.fromRGB(18, 22, 30),
         input = Color3.fromRGB(20, 24, 33), border = Color3.fromRGB(46, 55, 72),
         text = Color3.fromRGB(240, 243, 250), muted = Color3.fromRGB(158, 170, 190),
+        disabledText = Color3.fromRGB(98, 108, 126),
         accent = Color3.fromRGB(240, 100, 75), ink = Color3.fromRGB(39, 19, 15),
-        danger = Color3.fromRGB(244, 164, 164),
+        success = Color3.fromRGB(115, 205, 166), danger = Color3.fromRGB(244, 164, 164),
     }
     local function rounded(item, radius)
         object("UICorner", { CornerRadius = UDim.new(0, radius or 10) }, item)
         return item
     end
     local function outline(item, color)
-        object("UIStroke", { Color = color or colors.border, Thickness = 1, ApplyStrokeMode = Enum.ApplyStrokeMode.Border }, item)
+        return object("UIStroke", { Color = color or colors.border, Thickness = 1, ApplyStrokeMode = Enum.ApplyStrokeMode.Border }, item)
     end
     local function text(parent, name, value, size, color)
         return object("TextLabel", {
@@ -253,11 +271,11 @@ local function buildView(uiContext)
     local function input(parent, name, placeholder)
         local field = rounded(object("TextBox", {
             Name = name, BackgroundColor3 = colors.input, TextColor3 = colors.text,
-            PlaceholderColor3 = colors.muted, Font = Enum.Font.Gotham, TextSize = 14,
+            PlaceholderColor3 = colors.muted, Font = Enum.Font.Gotham, TextSize = 13,
             TextXAlignment = Enum.TextXAlignment.Left, PlaceholderText = placeholder,
             Text = "", ClearTextOnFocus = false, BorderSizePixel = 0,
         }, parent), 9)
-        object("UIPadding", { PaddingLeft = UDim.new(0, 12), PaddingRight = UDim.new(0, 12) }, field)
+        object("UIPadding", { PaddingLeft = UDim.new(0, 10), PaddingRight = UDim.new(0, 10) }, field)
         outline(field)
         return field
     end
@@ -268,7 +286,7 @@ local function buildView(uiContext)
         Size = UDim2.new(0.94, 0, 0.9, -40), BackgroundTransparency = 1, BorderSizePixel = 0,
     }, gui)
     object("UISizeConstraint", { MaxSize = Vector2.new(1040, 720) }, viewport)
-    -- The workspace stays horizontal; only the card grid scrolls.
+    -- The workspace stays horizontal; only the card grid and game nav scroll.
     local panel = rounded(object("Frame", {
         Name = "HubWindow", AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
         Size = UDim2.fromOffset(700, 340), BackgroundColor3 = colors.canvas, BorderSizePixel = 0,
@@ -280,37 +298,63 @@ local function buildView(uiContext)
         Font = Enum.Font.GothamBold, TextSize = 17, TextColor3 = colors.ink, BorderSizePixel = 0 }, panel), 10)
     local heading = text(panel, "Heading", "ZS HUB", 21)
     heading.Font = Enum.Font.GothamBold
-    local subtitle = text(panel, "Subtitle", "拖动标题栏移动窗口", 12, colors.muted)
+    local subtitle = text(panel, "Subtitle", "拖动标题栏移动窗口 · 选择游戏查看详情与脚本", 12, colors.muted)
     local dragHandle = object("Frame", { Name = "DragHandle", BackgroundTransparency = 1,
         Active = true, Selectable = false, BorderSizePixel = 0, ZIndex = 8 }, panel)
     local closeButton = button(panel, "CloseView", "关闭界面")
     local collapseButton = button(panel, "CollapseView", "收起")
+
+    -- 左侧：授权卡片 + 支持的游戏总列表导航
     local authorization = rounded(object("Frame", { Name = "Authorization", BackgroundColor3 = colors.surface, BorderSizePixel = 0 }, panel), 12)
     outline(authorization)
     local authTitle = text(authorization, "AuthTitle", "访问授权", 13)
+    authTitle.Font = Enum.Font.GothamMedium
     local authBadge = text(authorization, "AuthBadge", "未校验", 11, colors.muted)
     authBadge.TextXAlignment = Enum.TextXAlignment.Right
-    local status = text(authorization, "SessionStatus", statusMessage, 12, colors.muted)
+    local status = text(authorization, "SessionStatus", statusMessage, 11, colors.muted)
     local keyBox = input(authorization, "KeyInput", "请输入 Key")
     local loginButton = button(authorization, "ValidateKey", "校验 Key", true)
-    local kindLabel = text(authorization, "EntitlementKind", "", 16)
+    local kindLabel = text(authorization, "EntitlementKind", "", 14)
     kindLabel.Font = Enum.Font.GothamMedium
     local expiryLabel = text(authorization, "ExpiryLabel", "剩余有效期", 11, colors.muted)
-    local expiryValue = text(authorization, "ExpiryValue", "", 14)
-    local grantNote = text(authorization, "GrantNote", "", 12, colors.muted)
-    local libraryTitle = text(panel, "LibraryTitle", "脚本库", 18)
+    local expiryValue = text(authorization, "ExpiryValue", "", 13)
+    local grantNote = text(authorization, "GrantNote", "", 11, colors.muted)
+
+    local navHeading = text(panel, "GameNavHeading", "支持的游戏", 12, colors.muted)
+    navHeading.Font = Enum.Font.GothamMedium
+    local navCountLabel = text(panel, "GameNavCount", "1 款", 11, colors.muted)
+    navCountLabel.TextXAlignment = Enum.TextXAlignment.Right
+    local gameNavList = object("ScrollingFrame", {
+        Name = "GameNavList", BackgroundTransparency = 1, BorderSizePixel = 0,
+        ScrollBarThickness = 2, ScrollBarImageColor3 = colors.border,
+        ScrollingDirection = Enum.ScrollingDirection.Y, AutomaticCanvasSize = Enum.AutomaticSize.None,
+        CanvasSize = UDim2.new(), ClipsDescendants = true,
+    }, panel)
+
+    -- 右侧顶部：所选游戏的详情横幅卡片
+    local gameDetailCard = rounded(object("Frame", { Name = "GameDetailCard", BackgroundColor3 = colors.surface, BorderSizePixel = 0 }, panel), 12)
+    outline(gameDetailCard)
+    local libraryTitle = text(panel, "LibraryTitle", "当前游戏", 16)
     libraryTitle.Font = Enum.Font.GothamBold
-    libraryTitle.TextSize, libraryTitle.TextWrapped = 16, false
+    libraryTitle.TextWrapped = false
     local gameNameEn = text(panel, "CurrentGameNameEn", "游戏资料待同步", 12, colors.muted)
     gameNameEn.TextWrapped = false
+    local gameMatchBadge = rounded(text(panel, "GameMatchBadge", "当前游戏", 11, colors.accent), 6)
+    gameMatchBadge.BackgroundTransparency = 0
+    gameMatchBadge.BackgroundColor3 = colors.surfaceElevated
+    gameMatchBadge.TextXAlignment = Enum.TextXAlignment.Center
+    gameMatchBadge.TextYAlignment = Enum.TextYAlignment.Center
     local gamePlaceholder = rounded(text(panel, "CurrentGamePlaceholder", "游戏", 12, colors.muted), 9)
-    gamePlaceholder.BackgroundTransparency, gamePlaceholder.BackgroundColor3 = 0, colors.surface
+    gamePlaceholder.BackgroundTransparency, gamePlaceholder.BackgroundColor3 = 0, colors.surfaceElevated
     gamePlaceholder.TextXAlignment, gamePlaceholder.TextYAlignment = Enum.TextXAlignment.Center, Enum.TextYAlignment.Center
     local gameImage = rounded(object("ImageLabel", { Name = "CurrentGameImage", BackgroundTransparency = 1, BorderSizePixel = 0,
         ScaleType = Enum.ScaleType.Fit, Image = "", ZIndex = 3 }, panel), 9)
     local operationStatus = text(panel, "OperationStatus", "选择脚本后手动加载", 12, colors.muted)
+    operationStatus.TextWrapped = false
     local countLabel = text(panel, "ScriptCount", "正在同步目录", 12, colors.muted)
     countLabel.TextXAlignment = Enum.TextXAlignment.Right
+
+    -- 右侧主体：脚本卡片网格滚动区
     local list = object("ScrollingFrame", {
         Name = "ScriptGrid", BackgroundTransparency = 1, BorderSizePixel = 0,
         ScrollBarThickness = 3, ScrollBarImageColor3 = colors.border,
@@ -359,7 +403,10 @@ local function buildView(uiContext)
     local promptValidate = button(promptPanel, "AuthPromptValidate", "去校验 Key", true)
     promptValidate.ZIndex = 52
     place(promptValidate, 144, 132, 176, 44)
+
     local cards, cardParts = {}, {}
+    local navButtons, navParts = {}, {}
+    local groups, activeGroup = {}, nil
     local currentView = { context = uiContext, status = status, keyBox = keyBox }
     local function closeUI()
         if view == currentView then view = nil end
@@ -382,8 +429,15 @@ local function buildView(uiContext)
     local function notGranted(script)
         return entitlement and entitlement.kind == "GAME" and entitlement.gameId ~= script.gameId
     end
+    local function isScriptPlayableInHere(script)
+        return script.universal or Runtime.rank(script, game.GameId, game.PlaceId) == 0
+    end
     local function requestScript(script)
         if not uiContext.alive or not owner.alive then return end
+        if not isScriptPlayableInHere(script) then
+            setStatus("非当前游戏脚本已置灰，请进入对应游戏后加载")
+            return
+        end
         if not token then
             promptTitle.Text = loginBusy and "正在校验 Key" or "请先校验 Key"
             promptBody.Text = loginBusy and "授权正在校验，请稍候。成功后再次点击脚本加载。" or "在左侧输入 Key 并完成校验后，再点击脚本加载。"
@@ -414,20 +468,48 @@ local function buildView(uiContext)
         loginButton.Active, keyBox.TextEditable = editable and not loginBusy, editable and not loginBusy
         loginButton.Text = loginBusy and "正在校验…" or "校验 Key"
         authBadge.Text = not owner.alive and "已结束" or (verified and "已校验" or (loginBusy and "校验中" or "未校验"))
-        authBadge.TextColor3 = verified and Color3.fromRGB(115, 205, 166) or colors.muted
+        authBadge.TextColor3 = verified and colors.success or colors.muted
         kindLabel.Visible, expiryLabel.Visible, expiryValue.Visible, grantNote.Visible = verified, verified, verified, verified
         if verified then
             kindLabel.Text = entitlement.kind == "MEMBER" and "全游戏会员" or "单游戏 · 30 天"
             updateRemaining()
-            grantNote.Text = entitlement.kind == "MEMBER" and "当前游戏及通用脚本\n关闭界面仍持续校验" or "仅限绑定游戏\n关闭界面仍持续校验"
+            grantNote.Text = entitlement.kind == "MEMBER" and "当前游戏及通用脚本" or "仅限绑定游戏"
         end
-        operationStatus.Text = verified and statusMessage or "先完成 Key 校验，再选择脚本"
+        local viewingOther = activeGroup and not activeGroup.isCurrent
+        if viewingOther then
+            operationStatus.Text = "当前正在预览其他游戏详情，非当前游戏脚本已置灰，需进入对应游戏后加载"
+        else
+            operationStatus.Text = verified and statusMessage or "先完成 Key 校验，再选择脚本"
+        end
+        for _, navBtn in ipairs(navButtons) do
+            local np = navParts[navBtn]
+            local selected = activeGroup and np.group.key == activeGroup.key
+            navBtn.BackgroundColor3 = selected and colors.surfaceElevated or colors.surface
+            np.stroke.Color = selected and colors.accent or colors.border
+            np.bar.Visible = selected
+            np.title.TextColor3 = selected and colors.text or (np.group.isCurrent and colors.text or colors.muted)
+            np.badge.TextColor3 = np.group.isCurrent and colors.accent or colors.muted
+        end
         for _, card in ipairs(cards) do
             local parts = cardParts[card]
             local script = parts.script
-            parts.action.Text = not script.enabled and "待上架" or (scriptStarted and (activeScriptId == script.id and "运行中" or "重新进入后切换")
-                or (loading and loadingScriptId == script.id and "正在加载…" or (notGranted(script) and "需匹配权益" or (verified and "加载  →" or "校验后加载"))))
-            parts.action.TextColor3 = (not script.enabled or notGranted(script) or (scriptStarted and activeScriptId ~= script.id)) and colors.muted or colors.accent
+            local playableHere = isScriptPlayableInHere(script)
+            local canInteract = script.enabled and playableHere
+            card.Selectable = canInteract
+            card.AutoButtonColor = canInteract
+            card.BackgroundColor3 = playableHere and colors.surface or colors.surfaceDisabled
+            parts.title.TextColor3 = (script.enabled and playableHere) and colors.text or colors.disabledText
+            parts.scenario.TextColor3 = playableHere and colors.muted or colors.disabledText
+            parts.loadCount.Text = Runtime.loadCountText(getScriptLoadCount(script))
+            parts.loadCount.TextColor3 = playableHere and colors.muted or colors.disabledText
+            if not playableHere then
+                parts.action.Text = "非当前游戏"
+                parts.action.TextColor3 = colors.disabledText
+            else
+                parts.action.Text = not script.enabled and "待上架" or (scriptStarted and (activeScriptId == script.id and "运行中" or "重新进入后切换")
+                    or (loading and loadingScriptId == script.id and "正在加载…" or (notGranted(script) and "需匹配权益" or (verified and "加载  →" or "校验后加载"))))
+                parts.action.TextColor3 = (not script.enabled or notGranted(script) or (scriptStarted and activeScriptId ~= script.id)) and colors.muted or colors.accent
+            end
         end
     end
     local inputService = game:GetService("UserInputService")
@@ -457,114 +539,208 @@ local function buildView(uiContext)
     connect(inputService.WindowFocusReleased, function() dragInput = nil end)
     local function fit()
         local size = viewport.AbsoluteSize
-        local layout = Runtime.layout(size.X, size.Y, currentSection.size, universalSection.size)
+        local showUniversal = not activeGroup or activeGroup.isCurrent
+        local layout = Runtime.layout(size.X, size.Y, currentSection.size, universalSection.size, #navButtons, showUniversal)
         currentLayout = layout
         panel.Size = UDim2.fromOffset(layout.width, layout.height)
         uiScale.Scale = layout.scale
         local w, pad = layout.width, layout.pad
-        place(dragHandle, pad, 10, w - pad * 2 - 152, 56)
-        place(brand, pad, 18, 38, 38)
-        place(heading, pad + 50, 16, math.max(72, w - pad * 2 - 202), 26)
-        place(subtitle, pad + 50, 46, math.max(72, w - pad * 2 - 202), 20)
-        place(closeButton, w - pad - 88, 18, 88, 44)
-        place(collapseButton, w - pad - 140, 18, 44, 44)
-        local inner = layout.compact and 156 or 188
-        local top = layout.compact and 10 or 14
-        place(authorization, pad, 80, inner + 28, layout.compact and 196 or 224)
-        place(authTitle, 14, top, inner - 58, 22)
-        place(authBadge, 14 + inner - 58, top + 2, 58, 20)
-        place(status, 14, layout.compact and 36 or 48, inner, layout.compact and 46 or 52)
-        place(keyBox, 14, layout.compact and 92 or 112, inner, 44)
-        place(loginButton, 14, layout.compact and 144 or 168, inner, 44)
-        place(kindLabel, 14, layout.compact and 44 or 50, inner, 24)
-        place(expiryLabel, 14, layout.compact and 78 or 90, inner, 18)
-        place(expiryValue, 14, layout.compact and 102 or 114, inner, 24)
-        place(grantNote, 14, layout.compact and 140 or 158, inner, 40)
-        place(gamePlaceholder, layout.left, layout.mainTop, 44, 44)
-        place(gameImage, layout.left, layout.mainTop, 44, 44)
-        place(libraryTitle, layout.left + 56, layout.mainTop, layout.mainWidth - 168, 24)
-        place(gameNameEn, layout.left + 56, layout.mainTop + 26, layout.mainWidth - 56, 18)
-        place(countLabel, layout.left + layout.mainWidth - 100, layout.mainTop + 4, 100, 20)
-        place(operationStatus, layout.left, layout.mainTop + 48, layout.mainWidth, 18)
-        place(list, layout.left, layout.gridTop, layout.mainWidth, layout.gridHeight)
-        for index, section in ipairs({currentSection, universalSection}) do
-            local height = index == 1 and layout.currentHeight or layout.universalHeight
-            place(section.root, 0, index == 1 and 0 or layout.currentHeight + 16, layout.mainWidth - 4, height)
-            place(section.title, 0, 0, layout.mainWidth - 100, 22)
-            place(section.count, layout.mainWidth - 96, 2, 88, 20)
-            place(section.content, 0, 32, layout.mainWidth - 4, height - 32)
-            place(section.empty, 0, 32, layout.mainWidth - 8, 44)
-            section.grid.CellSize = UDim2.fromOffset(layout.cellWidth, layout.cardHeight)
-            section.grid.FillDirectionMaxCells = layout.columns
-            section.count.Text = tostring(section.size) .. " 个"
-            section.empty.Visible = section.size == 0
+        place(dragHandle, pad, 10, w - pad * 2 - 152, 52)
+        place(brand, pad, 16, 38, 38)
+        place(heading, pad + 50, 14, math.max(72, w - pad * 2 - 202), 24)
+        place(subtitle, pad + 50, 40, math.max(72, w - pad * 2 - 202), 18)
+        place(closeButton, w - pad - 88, 16, 88, 44)
+        place(collapseButton, w - pad - 140, 16, 44, 44)
+        local sidebarWidth = layout.left - pad - 12
+        local inner = sidebarWidth - 24
+        local authTop = layout.mainTop
+        local authHeight = layout.compact and 164 or 184
+        place(authorization, pad, authTop, sidebarWidth, authHeight)
+        place(authTitle, 12, 10, inner - 54, 18)
+        place(authBadge, 12 + inner - 54, 10, 54, 18)
+        place(status, 12, 30, inner, layout.compact and 30 or 36)
+        place(keyBox, 12, layout.compact and 64 or 74, inner, 44)
+        place(loginButton, 12, layout.compact and 112 or 126, inner, 44)
+        place(kindLabel, 12, 34, inner, 20)
+        place(expiryLabel, 12, layout.compact and 60 or 66, inner, 16)
+        place(expiryValue, 12, layout.compact and 80 or 88, inner, 20)
+        place(grantNote, 12, layout.compact and 108 or 118, inner, 32)
+
+        -- 左侧下方：支持的游戏总列表
+        local navTop = authTop + authHeight + 10
+        place(navHeading, pad, navTop, sidebarWidth - 52, 18)
+        place(navCountLabel, pad + sidebarWidth - 50, navTop, 50, 18)
+        local navListTop = navTop + 22
+        local navListBottom = layout.compact and (layout.footerY - 6) or (layout.height - 16)
+        local navListHeight = math.max(44, navListBottom - navListTop)
+        place(gameNavList, pad, navListTop, sidebarWidth, navListHeight)
+        for idx, navBtn in ipairs(navButtons) do
+            local np = navParts[navBtn]
+            local y = (idx - 1) * (layout.navItemHeight + layout.navGap)
+            place(navBtn, 0, y, sidebarWidth - 4, layout.navItemHeight)
+            place(np.bar, 0, 8, 3, layout.navItemHeight - 16)
+            place(np.title, 10, 6, sidebarWidth - 62, 18)
+            place(np.sub, 10, 24, sidebarWidth - 62, 14)
+            place(np.badge, sidebarWidth - 52, 6, 42, 18)
         end
-        for _,card in ipairs(cards) do
+        gameNavList.CanvasSize = UDim2.fromOffset(0, layout.navContentHeight)
+        gameNavList.ScrollingEnabled = true
+
+        -- 右侧顶部：游戏详情卡片
+        place(gameDetailCard, layout.left, layout.mainTop, layout.mainWidth, layout.detailHeight)
+        place(gamePlaceholder, layout.left + 12, layout.mainTop + 12, 44, 44)
+        place(gameImage, layout.left + 12, layout.mainTop + 12, 44, 44)
+        place(libraryTitle, layout.left + 66, layout.mainTop + 10, layout.mainWidth - 224, 22)
+        place(gameMatchBadge, layout.left + layout.mainWidth - 154, layout.mainTop + 11, 68, 20)
+        place(countLabel, layout.left + layout.mainWidth - 82, layout.mainTop + 12, 70, 20)
+        place(gameNameEn, layout.left + 66, layout.mainTop + 33, layout.mainWidth - 78, 16)
+        place(operationStatus, layout.left + 66, layout.mainTop + 50, layout.mainWidth - 78, 16)
+
+        -- 右侧脚本网格区
+        place(list, layout.left, layout.gridTop, layout.mainWidth, layout.gridHeight)
+        universalSection.root.Visible = showUniversal
+        for index, sec in ipairs({currentSection, universalSection}) do
+            local height = index == 1 and layout.currentHeight or layout.universalHeight
+            place(sec.root, 0, index == 1 and 0 or layout.currentHeight + 16, layout.mainWidth - 4, height)
+            place(sec.title, 0, 0, layout.mainWidth - 100, 22)
+            place(sec.count, layout.mainWidth - 96, 2, 88, 20)
+            place(sec.content, 0, 32, layout.mainWidth - 4, height - 32)
+            place(sec.empty, 0, 32, layout.mainWidth - 8, 44)
+            sec.grid.CellSize = UDim2.fromOffset(layout.cellWidth, layout.cardHeight)
+            sec.grid.FillDirectionMaxCells = layout.columns
+            sec.count.Text = tostring(sec.size) .. " 个"
+            sec.empty.Visible = sec.size == 0
+        end
+        for _, card in ipairs(cards) do
             local parts = cardParts[card]
-            parts.title.Position = UDim2.fromOffset(14, layout.compact and 34 or 36)
+            parts.title.Position = UDim2.fromOffset(14, layout.compact and 32 or 34)
             parts.title.Size = UDim2.new(1, -28, 0, layout.compact and 32 or 36)
-            parts.scenario.Position = UDim2.fromOffset(14, layout.compact and 72 or 78)
-            parts.scenario.Size = UDim2.new(1, -28, 0, 30)
-            parts.action.Position = UDim2.fromOffset(14, layout.cardHeight - 34)
-            parts.action.Size = UDim2.new(1, -28, 0, 24)
+            parts.scenario.Position = UDim2.fromOffset(14, layout.compact and 68 or 74)
+            parts.scenario.Size = UDim2.new(1, -28, 0, 28)
+            parts.loadCount.Position = UDim2.fromOffset(14, layout.cardHeight - 32)
+            parts.loadCount.Size = UDim2.new(0.52, -14, 0, 22)
+            parts.action.Position = UDim2.fromOffset(14, layout.cardHeight - 32)
+            parts.action.Size = UDim2.new(1, -28, 0, 22)
         end
         list.CanvasSize = UDim2.fromOffset(0, layout.gridContentHeight)
         list.ScrollingEnabled = true
-        place(footerNote, pad, layout.footerY + 4, w - pad * 2 - 124, 40)
-        place(stopButton, layout.compact and pad or w - pad - 112, layout.footerY, layout.compact and 184 or 112, 44)
+        place(footerNote, layout.left, layout.footerY + 6, layout.mainWidth - 124, 36)
+        place(stopButton, layout.compact and pad or w - pad - 112, layout.footerY, layout.compact and sidebarWidth or 112, 44)
         footerNote.Visible = not layout.compact
         moveWindow(dragOffset)
     end
     connect(viewport:GetPropertyChangedSignal("AbsoluteSize"), fit)
     connect(collapseButton.Activated, function() dragInput = nil panel.Visible = false toggle.Visible = true end)
     connect(toggle.Activated, function() panel.Visible = true toggle.Visible = false end)
-    local function render()
+
+    local renderGroup
+    local function createCard(script, sec, playableHere)
+        sec.size += 1
+        local category = script.universal and "通用脚本" or (playableHere and "当前游戏" or "其他游戏")
+        local available = script.enabled and playableHere
+        local card = rounded(object("TextButton", {
+            Name = "ScriptCard_" .. script.id, LayoutOrder = sec.size, Size = UDim2.fromOffset(260, 188),
+            Text = script.nameZh, TextTransparency = 1, Selectable = available, AutoButtonColor = available,
+            BackgroundColor3 = playableHere and colors.surface or colors.surfaceDisabled, BorderSizePixel = 0,
+        }, sec.content), 12)
+        card.ClipsDescendants = true
+        outline(card)
+        if not script.universal then
+            object("Frame", {
+                Name = "CurrentRail", Position = UDim2.fromOffset(0, 12), Size = UDim2.fromOffset(3, 20),
+                BackgroundColor3 = playableHere and colors.accent or colors.border, BorderSizePixel = 0,
+            }, card)
+        end
+        local categoryLabel = text(card, "Category", category, 11, playableHere and (not script.universal and colors.accent or colors.muted) or colors.disabledText)
+        categoryLabel.Position, categoryLabel.Size = UDim2.fromOffset(14, 10), UDim2.new(1, -28, 0, 16)
+        local title = text(card, "ScriptName", script.nameZh, 15, available and colors.text or colors.disabledText)
+        title.Font = Enum.Font.GothamMedium
+        local scenario = text(card, "Scenario", Runtime.scenario(script), 12, playableHere and colors.muted or colors.disabledText)
+        local loadCount = text(card, "LoadCount", Runtime.loadCountText(getScriptLoadCount(script)), 11, playableHere and colors.muted or colors.disabledText)
+        loadCount.TextYAlignment = Enum.TextYAlignment.Center
+        loadCount.TextWrapped = false
+        local action = text(card, "CardAction", available and "加载  →" or (not playableHere and "非当前游戏" or "待上架"), 12, available and colors.accent or colors.disabledText)
+        action.TextYAlignment = Enum.TextYAlignment.Center
+        action.TextXAlignment = Enum.TextXAlignment.Right
+        card.Activated:Connect(function()
+            requestScript(script)
+        end)
+        cardParts[card] = { title = title, scenario = scenario, loadCount = loadCount, action = action, script = script }
+        table.insert(cards, card)
+    end
+
+    renderGroup = function(group)
+        activeGroup = group
+        selectedGroupKey = group.key
         for _, card in ipairs(cards) do card:Destroy() end
         table.clear(cards)
         table.clear(cardParts)
         currentSection.size, universalSection.size = 0, 0
-        local found = Runtime.search(catalog, "", game.GameId, game.PlaceId)
-        for _, script in ipairs(found) do
-            local rank = Runtime.rank(script, game.GameId, game.PlaceId)
-            local section = script.universal and universalSection or (rank == 0 and currentSection or nil)
-            if section then
-                section.size += 1
-                local category = script.universal and "通用脚本" or "当前游戏"
-                local available = script.enabled
-                local card = rounded(object("TextButton", {
-                    Name = "ScriptCard_" .. script.id, LayoutOrder = section.size, Size = UDim2.fromOffset(260, 188),
-                    Text = script.nameZh, TextTransparency = 1, Selectable = available, AutoButtonColor = available,
-                    BackgroundColor3 = colors.surface, BorderSizePixel = 0,
-                }, section.content), 12)
-                card.ClipsDescendants = true
-                outline(card)
-                if not script.universal then
-                    object("Frame", { Name = "CurrentRail", Position = UDim2.fromOffset(0, 12), Size = UDim2.fromOffset(3, 20), BackgroundColor3 = colors.accent, BorderSizePixel = 0 }, card)
-                end
-                local categoryLabel = text(card, "Category", category, 11, rank == 0 and colors.accent or colors.muted)
-                categoryLabel.Position, categoryLabel.Size = UDim2.fromOffset(14, 12), UDim2.new(1, -28, 0, 16)
-                local title = text(card, "ScriptName", script.nameZh, 15, script.enabled and colors.text or colors.muted)
-                title.Font = Enum.Font.GothamMedium
-                local scenario = text(card, "Scenario", Runtime.scenario(script), 12, colors.muted)
-                local action = text(card, "CardAction", available and "加载  →" or (script.enabled and "切换游戏后使用" or "待上架"), 12, available and colors.accent or colors.muted)
-                action.TextYAlignment = Enum.TextYAlignment.Center
-                action.TextXAlignment = Enum.TextXAlignment.Right
-                card.Activated:Connect(function()
-                    requestScript(script)
-                end)
-                cardParts[card] = { title = title, scenario = scenario, action = action, script = script }
-                table.insert(cards, card)
+        if group.isCurrent then
+            currentSection.title.Text = "当前游戏脚本"
+            currentSection.empty.Text = "当前游戏暂无适配脚本"
+            for _, script in ipairs(group.scripts) do
+                createCard(script, currentSection, true)
             end
+            for _, script in ipairs(group.universalScripts or {}) do
+                createCard(script, universalSection, true)
+            end
+            countLabel.Text = tostring(#cards) .. " 个脚本"
+            gameMatchBadge.Text = "当前游戏"
+            gameMatchBadge.TextColor3 = colors.accent
+        else
+            currentSection.title.Text = "支持脚本（非当前游戏 · 仅预览）"
+            currentSection.empty.Text = "该游戏暂无脚本"
+            for _, script in ipairs(group.scripts) do
+                createCard(script, currentSection, false)
+            end
+            countLabel.Text = tostring(#cards) .. " 个脚本"
+            gameMatchBadge.Text = "非当前游戏"
+            gameMatchBadge.TextColor3 = colors.muted
         end
-        countLabel.Text = tostring(#cards) .. " 个脚本"
-        local currentGame = Runtime.currentGame(catalog, game.GameId, game.PlaceId)
-        libraryTitle.Text = currentGame and type(currentGame.nameZh) == "string" and currentGame.nameZh ~= "" and currentGame.nameZh or "当前游戏"
-        gameNameEn.Text = currentGame and type(currentGame.nameEn) == "string" and currentGame.nameEn ~= "" and currentGame.nameEn or "英文名称未配置"
-        if not currentGame then gameNameEn.Text = "游戏资料待同步" end
-        gameImage.Image = game.GameId > 0 and ("rbxthumb://type=GameIcon&id=" .. tostring(game.GameId) .. "&w=150&h=150") or ""
+        libraryTitle.Text = group.nameZh
+        gameNameEn.Text = group.nameEn
+        local iconUniverse = group.universeId or (group.isCurrent and game.GameId or 0)
+        gameImage.Image = (type(iconUniverse) == "number" and iconUniverse > 0) and ("rbxthumb://type=GameIcon&id=" .. tostring(iconUniverse) .. "&w=150&h=150") or ""
         gamePlaceholder.Visible = not gameImage.IsLoaded
         currentView.refresh()
         fit()
+    end
+
+    local function render()
+        for _, btn in ipairs(navButtons) do btn:Destroy() end
+        table.clear(navButtons)
+        table.clear(navParts)
+        local currentEntry
+        groups, currentEntry = Runtime.gameGroups(catalog, game.GameId, game.PlaceId)
+        navCountLabel.Text = tostring(#groups) .. " 款"
+        local targetGroup = currentEntry
+        for idx, grp in ipairs(groups) do
+            if grp.key == selectedGroupKey then targetGroup = grp end
+            local navName = grp.isCurrent and "GameNav_current" or ("GameNav_" .. tostring(grp.gameId))
+            local btn = rounded(object("TextButton", {
+                Name = navName, LayoutOrder = idx, Text = grp.nameZh, TextTransparency = 1,
+                BackgroundColor3 = colors.surface, BorderSizePixel = 0, Selectable = true, AutoButtonColor = true,
+            }, gameNavList), 9)
+            local stroke = outline(btn)
+            local bar = rounded(object("Frame", {
+                Name = "ActiveBar", BackgroundColor3 = colors.accent, BorderSizePixel = 0, Visible = false,
+            }, btn), 2)
+            local tLabel = text(btn, "NavTitle", grp.nameZh, 13, colors.text)
+            tLabel.Font = Enum.Font.GothamMedium
+            tLabel.TextWrapped = false
+            local scriptTotal = #grp.scripts + (grp.universalScripts and #grp.universalScripts or 0)
+            local sLabel = text(btn, "NavSub", (grp.isCurrent and "当前所在 · " or "点击查看 · ") .. tostring(scriptTotal) .. " 个脚本", 11, colors.muted)
+            sLabel.TextWrapped = false
+            local bLabel = text(btn, "NavBadge", grp.isCurrent and "当前" or "预览", 11, grp.isCurrent and colors.accent or colors.muted)
+            bLabel.TextXAlignment = Enum.TextXAlignment.Right
+            btn.Activated:Connect(function()
+                renderGroup(grp)
+            end)
+            navParts[btn] = { group = grp, stroke = stroke, bar = bar, title = tLabel, sub = sLabel, badge = bLabel }
+            table.insert(navButtons, btn)
+        end
+        renderGroup(targetGroup)
     end
     connect(loginButton.Activated, function() task.spawn(login, keyBox.Text) end)
     connect(stopButton.Activated, function() endSession("你已结束本局，请重新进入游戏后使用 Hub") end)
@@ -671,6 +847,11 @@ local data, err = api("GET", "/api/hub/catalog")
 if not owner.alive then return end
 if data and type(data.scripts) == "table" then
     catalog = data.scripts
+    for _, script in ipairs(catalog) do
+        if type(script.id) == "string" and loadCounts[script.id] == nil then
+            loadCounts[script.id] = math.max(0, math.floor(tonumber(script.loadCount) or 0))
+        end
+    end
     if view then view.render() end
     if statusMessage == "正在获取正式目录…" then setStatus("目录已就绪；请先校验 Key，再选择脚本加载") end
 else
