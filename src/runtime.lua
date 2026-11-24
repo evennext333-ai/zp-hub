@@ -74,8 +74,8 @@ end
 
 -- 格式化脚本是否需要 Key（原脚本自带卡密）的标识文案
 function Runtime.keyBadgeText(script)
-    local needsKey = type(script) == "table" and script.requiresKey == true
-    return needsKey and "🔑 需Key" or "免Key"
+    if type(script) ~= "table" or type(script.requiresKey) ~= "boolean" then return "卡密待同步" end
+    return script.requiresKey and "脚本需卡密" or "脚本免卡密"
 end
 
 -- 提取支持的游戏总列表（可按关键字搜索过滤），以及当前游戏的专属与通用脚本分组

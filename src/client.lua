@@ -214,22 +214,8 @@ run = function(script)
 end
 
 -- UI 的资源作用域仅属于这一轮视图；销毁它不会改变授权控制器。
--- 采用 Fluent UI 开源库架构（CoreGui / gethui 容器隔离 + AutoButtonColor=false + 多端释放事件兼容 + 防外部篡改），彻底避免游戏自带 PlayerGui 脚本劫持按钮导致点击缩小或失效。
+-- 优先使用独立 UI 容器减少与游戏界面的干扰；容器隔离不替代后台授权。
 local function buildView(uiContext)
-    local playerGui = player:WaitForChild("PlayerGui", 10)
-    assert(playerGui, "玩家界面尚未就绪，请重新加载入口恢复界面")
-    local guiParent = playerGui
-    if type(gethui) == "function" then
-        local okHui, hui = pcall(gethui)
-        if okHui and hui then guiParent = hui end
-    elseif type(get_hidden_gui) == "function" then
-        local okHidden, hidden = pcall(get_hidden_gui)
-        if okHidden and hidden then guiParent = hidden end
-    end
-    if guiParent == playerGui then
-        local okCore, coreGui = pcall(function() return game:GetService("CoreGui") end)
-        if okCore and coreGui then guiParent = coreGui end
-    end
     local function object(className, properties, parent)
         local item = Instance.new(className)
         if className == "TextButton" then
@@ -302,10 +288,21 @@ local function buildView(uiContext)
         outline(field)
         return field
     end
-    local gui = object("ScreenGui", { Name = "RSZH_Hub", ResetOnSpawn = false, DisplayOrder = 10000, ZIndexBehavior = Enum.ZIndexBehavior.Sibling }, guiParent)
+    local gui = object("ScreenGui", { Name = "RSZH_Hub", ResetOnSpawn = false, DisplayOrder = 10000, ZIndexBehavior = Enum.ZIndexBehavior.Sibling }, nil)
+    uiContext.onCleanup(function() gui:Destroy() end)
     local protectFn = protectgui or (syn and syn.protect_gui)
     if type(protectFn) == "function" then pcall(protectFn, gui) end
-    uiContext.onCleanup(function() gui:Destroy() end)
+    local function attach(provider)
+        local ok, parent = pcall(provider)
+        if not ok or parent == nil then return false end
+        return pcall(function() gui.Parent = parent end)
+    end
+    local mounted = (type(gethui) == "function" and attach(gethui))
+        or (type(get_hidden_gui) == "function" and attach(get_hidden_gui))
+        or attach(function() return game:GetService("CoreGui") end)
+        or attach(function() return player:WaitForChild("PlayerGui", 10) end)
+    assert(mounted, "玩家界面尚未就绪，请重新加载入口恢复界面")
+    local guiParent = gui.Parent
     local viewport = object("Frame", {
         Name = "HubViewport", AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(0.5, 0, 0.5, -20),
         Size = UDim2.new(0.94, 0, 0.9, -40), BackgroundTransparency = 1, BorderSizePixel = 0,
@@ -476,67 +473,68 @@ local function buildView(uiContext)
         end)
         uiContext.onCleanup(function() connection:Disconnect() end)
     end
+    local inputEpoch = 0
     local function bindClick(btn, callback)
         local lastKind, lastAt = nil, -1
-        local pressStart = nil
+        local touch, touchStart, touchEpoch, scrollPositions
+        local function available()
+            if not uiContext.alive or btn.Parent == nil or btn.Active == false then return false end
+            local node = btn
+            while node do
+                local class = node.ClassName
+                if (class == "ScreenGui" and node.Enabled == false)
+                    or ((class == "Frame" or class == "ScrollingFrame" or class == "TextButton") and node.Visible == false) then return false end
+                node = node.Parent
+            end
+            return true
+        end
         local function makeTrigger(kind)
             return function()
-                if not uiContext.alive or btn.Parent == nil then return end
+                if not available() then return end
                 local now = os.clock()
                 if lastKind ~= nil and lastKind ~= kind and now - lastAt < 0.15 then return end
                 lastKind, lastAt = kind, now
                 callback()
             end
         end
-        local fireActivated = makeTrigger("activated")
-        local fireMouse = makeTrigger("mouse")
-        local fireUp = makeTrigger("up")
-        local fireInput = makeTrigger("input")
-        -- 防护：若执行器退回 PlayerGui 且游戏脚本试图向按钮注入 UIScale 实现点击缩小，立即移除该 UIScale
-        if btn.ChildAdded then
-            pcall(function()
-                btn.ChildAdded:Connect(function(child)
-                    if child and child.ClassName == "UIScale" then
-                        pcall(function() child:Destroy() end)
-                    end
-                end)
-            end)
+        -- Native signals disconnect on Destroy; replaced cards are not retained by UI cleanup.
+        btn.Activated:Connect(makeTrigger("activated"))
+        btn.MouseButton1Click:Connect(makeTrigger("mouse"))
+        btn.ChildAdded:Connect(function(child)
+            if uiContext.alive and btn.Parent and child.ClassName == "UIScale" then pcall(function() child:Destroy() end) end
+        end)
+        local fireTouch = makeTrigger("touch")
+        local function point(input) return input and input.Position and Vector2.new(input.Position.X, input.Position.Y) end
+        local function contains(item, p)
+            local pos, size = item.AbsolutePosition, item.AbsoluteSize
+            return pos and size and size.X > 0 and size.Y > 0 and p.X >= pos.X and p.Y >= pos.Y
+                and p.X < pos.X + size.X and p.Y < pos.Y + size.Y
         end
-        -- Native button signals disconnect on Destroy; do not retain replaced cards in UI cleanup.
-        btn.Activated:Connect(fireActivated)
-        if btn.MouseButton1Click then btn.MouseButton1Click:Connect(fireMouse) end
-        if btn.MouseButton1Up then
-            btn.MouseButton1Up:Connect(function()
-                if pressStart ~= nil then
-                    pressStart = nil
-                    fireUp()
-                end
-            end)
-        end
-        if btn.InputBegan then
-            btn.InputBegan:Connect(function(input)
-                if not input then return end
-                local t = input.UserInputType
-                if t == Enum.UserInputType.MouseButton1 or t == Enum.UserInputType.Touch then
-                    local pos = input.Position
-                    pressStart = pos and Vector2.new(pos.X, pos.Y) or Vector2.new(0, 0)
-                end
-            end)
-        end
-        if btn.InputEnded then
-            btn.InputEnded:Connect(function(input)
-                if not input or pressStart == nil then return end
-                local t = input.UserInputType
-                if t == Enum.UserInputType.MouseButton1 or t == Enum.UserInputType.Touch then
-                    local startPos = pressStart
-                    pressStart = nil
-                    local pos = input.Position
-                    if not pos or (Vector2.new(pos.X, pos.Y) - startPos).Magnitude <= 24 then
-                        fireInput()
-                    end
-                end
-            end)
-        end
+        btn.InputBegan:Connect(function(input)
+            if touch or not input or input.UserInputType ~= Enum.UserInputType.Touch or not available() or not point(input) or not contains(btn, point(input)) then return end
+            touch, touchStart, touchEpoch, scrollPositions = input, point(input), inputEpoch, {}
+            local node = btn.Parent
+            while node do
+                if node.ClassName == "ScrollingFrame" then scrollPositions[node] = node.CanvasPosition end
+                node = node.Parent
+            end
+        end)
+        btn.InputChanged:Connect(function(input)
+            if touch and input == touch and point(input) and (point(input) - touchStart).Magnitude > 8 then touch = nil end
+        end)
+        btn.InputEnded:Connect(function(input)
+            if not input or input ~= touch then return end
+            touch = nil
+            local p = point(input)
+            if not available() or touchEpoch ~= inputEpoch or not p or (p - touchStart).Magnitude > 8 or not contains(btn, p) then return end
+            local node = btn.Parent
+            while node do
+                if (node.ClassName == "Frame" or node.ClassName == "ScrollingFrame") and node.ClipsDescendants and not contains(node, p) then return end
+                if node.ClassName == "ScrollingFrame" and node.CanvasPosition ~= scrollPositions[node] then return end
+                node = node.Parent
+            end
+            fireTouch()
+        end)
     end
     bindClick(promptValidate, function()
         currentView.dismissAuthPrompt()
@@ -640,7 +638,7 @@ local function buildView(uiContext)
             card.BackgroundColor3 = playableHere and colors.surface or colors.surfaceDisabled
             local needsKey = script.requiresKey == true
             parts.keyBadge.Text = Runtime.keyBadgeText(script)
-            parts.keyBadge.TextColor3 = not playableHere and colors.disabledText or (needsKey and colors.accent or colors.success)
+            parts.keyBadge.TextColor3 = not playableHere and colors.disabledText or (needsKey and colors.accent or (script.requiresKey == false and colors.success or colors.muted))
             parts.title.TextColor3 = (script.enabled and playableHere) and colors.text or colors.disabledText
             parts.scenario.TextColor3 = playableHere and colors.muted or colors.disabledText
             parts.loadCount.Text = Runtime.loadCountText(getScriptLoadCount(script))
@@ -679,7 +677,7 @@ local function buildView(uiContext)
     connect(inputService.InputEnded, function(input)
         if input == dragInput or (dragInput and dragInput.UserInputType == Enum.UserInputType.MouseButton1 and input.UserInputType == Enum.UserInputType.MouseButton1) then dragInput = nil end
     end)
-    connect(inputService.WindowFocusReleased, function() dragInput = nil end)
+    connect(inputService.WindowFocusReleased, function() dragInput = nil inputEpoch += 1 end)
     fit = function()
         local size = viewport.AbsoluteSize
         if size and size.X >= 100 and size.Y >= 100 then
@@ -825,7 +823,7 @@ local function buildView(uiContext)
         local categoryLabel = text(card, "Category", category, 11, playableHere and (not script.universal and colors.accent or colors.muted) or colors.disabledText)
         categoryLabel.Position, categoryLabel.Size = UDim2.fromOffset(14, 10), UDim2.new(1, -86, 0, 16)
         local needsKey = script.requiresKey == true
-        local keyBadge = rounded(text(card, "KeyBadge", Runtime.keyBadgeText(script), 10, not playableHere and colors.disabledText or (needsKey and colors.accent or colors.success)), 5)
+        local keyBadge = rounded(text(card, "KeyBadge", Runtime.keyBadgeText(script), 10, not playableHere and colors.disabledText or (needsKey and colors.accent or (script.requiresKey == false and colors.success or colors.muted))), 5)
         keyBadge.Font = Enum.Font.GothamMedium
         keyBadge.BackgroundTransparency = 0
         keyBadge.BackgroundColor3 = colors.surfaceElevated

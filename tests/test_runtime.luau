@@ -61,9 +61,11 @@ assert(Runtime.scenario({shortDescription="不要展示简介"}) == "场景信�
 assert(Runtime.loadCountText(nil) == "已执行 0 次")
 assert(Runtime.loadCountText(15) == "已执行 15 次")
 assert(Runtime.loadCountText(-3) == "已执行 0 次")
-assert(Runtime.keyBadgeText({requiresKey = true}) == "🔑 需Key")
-assert(Runtime.keyBadgeText({requiresKey = false}) == "免Key")
-assert(Runtime.keyBadgeText({}) == "免Key")
+assert(Runtime.keyBadgeText({requiresKey = true}) == "脚本需卡密")
+assert(Runtime.keyBadgeText({requiresKey = false}) == "脚本免卡密")
+assert(Runtime.keyBadgeText({}) == "卡密待同步")
+assert(Runtime.keyBadgeText({requiresKey = "false"}) == "卡密待同步")
+assert(Runtime.keyBadgeText(nil) == "卡密待同步")
 local groups, currentGroup = Runtime.gameGroups({
     {id="other-1", gameId="beta", nameZh="Beta脚本", nameEn="Beta", placeIds={}, universeIds={99}, game={id="beta", nameZh="其他游戏Beta", nameEn="Beta Game"}},
     {id="uni-1", gameId="common", nameZh="通用1", nameEn="Uni1", universal=true, placeIds={}, universeIds={}},

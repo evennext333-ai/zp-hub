@@ -18,7 +18,7 @@ local function fixture(options)
     options = options or {}
     local objects, threads = {}, {}
     local counter = {logins=0, loads=0, heartbeats=0, deletes=0, loadIds={}, catalogs=0, guiLookups=0, starts=0, cleanups=0, kicks={}, warnings={}, sources={}}
-    local server = {nowMillis=datetime.fromIsoDate("2027-04-08T16:00:00Z").unixTimestampMillis,source=options.source or originalSource, lease=options.lease or 90,
+    local server = {deniedParents=options.deniedParents,guiUnavailable=options.guiUnavailable,nowMillis=datetime.fromIsoDate("2027-04-08T16:00:00Z").unixTimestampMillis,source=options.source or originalSource, lease=options.lease or 90,
         delayLogin=options.delayLogin or 0, delayLoad=options.delayLoad or 0,
         delayHeartbeat=options.delayHeartbeat or 0, loginError=options.loginError,
         loadError=options.loadError, heartbeatError=options.heartbeatError,
@@ -41,7 +41,7 @@ local function fixture(options)
     end
     local function create(class)
         local native = rb.Instance.new(class)
-        local data = {ClassName=class,AbsoluteSize=rb.Vector2.new(600,560),Activated=signal(),MouseButton1Click=signal(),MouseButton1Up=signal(),FocusLost=signal(),InputBegan=signal(),InputEnded=signal(),ChildAdded=signal(),Destroying=signal(),signals={},native=native}
+        local data = {ClassName=class,AbsolutePosition=rb.Vector2.new(0,0),AbsoluteSize=rb.Vector2.new(600,560),Activated=signal(),MouseButton1Click=signal(),MouseButton1Up=signal(),FocusLost=signal(),InputBegan=signal(),InputChanged=signal(),InputEnded=signal(),ChildAdded=signal(),Destroying=signal(),signals={},native=native}
         if options.centeredButtons and class=="TextButton" then data.AnchorPoint=rb.Vector2.new(0.5,0.5) end
         local item = setmetatable({}, {
             __index=function(_,key)
@@ -53,8 +53,12 @@ local function fixture(options)
             __newindex=function(self,key,value)
                 if server.uiWriteError and key=="Text" then error("fixture UI write error") end
                 if key=="Parent" then
+                    if value~=nil then
+                        assert(type(value)=="table" and (value.native or value.fixtureParent),"Parent must be an Instance")
+                        if server.deniedParents and server.deniedParents[value.Name] then error("fixture parent permission denied") end
+                    end
                     native.Parent=type(value)=="table" and value.native or nil
-                elseif key~="AbsoluteSize" and key~="destroyed" then
+                elseif key~="AbsolutePosition" and key~="AbsoluteSize" and key~="destroyed" then
                     local ok,err=pcall(function()native[key]=value end)
                     assert(ok,"无效 Roblox 属性："..class.."."..key.." / "..tostring(err))
                 end
@@ -102,11 +106,12 @@ local function fixture(options)
         table.insert(threads,thread);return thread
     end
     local generation=0
+    local playerGui = {Name="PlayerGui",ClassName="PlayerGui",fixtureParent=true}
     local player = {WaitForChild=function()
         counter.guiLookups+=1
         if server.guiUnavailable then error("fixture PlayerGui unavailable") end
         if server.guiDelay then task.wait(server.guiDelay) end
-        return {}
+        return playerGui
     end}
     if not options.missingKick then
         function player:Kick(message)
@@ -135,12 +140,15 @@ local function fixture(options)
         warn=function(message)table.insert(counter.warnings,message)end,
     }
     if options.withHui then
-        local huiContainer = {Name="HiddenGui"}
-        environment.gethui = function() counter.huiLookups = (counter.huiLookups or 0) + 1; return huiContainer end
+        local huiContainer = {Name="HiddenGui",ClassName="Folder",fixtureParent=true}
+        environment.gethui = function() counter.huiLookups = (counter.huiLookups or 0) + 1; if options.huiThrows then error("fixture gethui error") end;return options.huiInvalid and "invalid-parent" or huiContainer end
         environment.huiContainer = huiContainer
     end
+    if options.withHidden then
+        environment.get_hidden_gui=function()return {Name="SecondaryHiddenGui",ClassName="Folder",fixtureParent=true}end
+    end
     if options.withCoreGui then
-        local coreContainer = {Name="CoreGui"}
+        local coreContainer = {Name="CoreGui",ClassName="CoreGui",fixtureParent=true}
         services.CoreGui = coreContainer
         environment.coreContainer = coreContainer
     end
@@ -219,7 +227,7 @@ local function fixture(options)
     function f.destroy()for _,o in ipairs(objects)do if o.Name=="RSZH_Hub" and not o.destroyed then o:Destroy()end end end
     counter.clearUI=f.destroy
     function f.cleanup()
-        server.guiUnavailable=false;server.guiDelay=nil;server.uiWriteError=false
+        server.guiUnavailable=false;server.guiDelay=nil;server.uiWriteError=false;server.deniedParents=nil
         pcall(f.finish)
         if f.owner then assert(not f.owner.alive, "手动结束本局应终止控制器") end
         for _,thread in ipairs(threads)do if coroutine.status(thread)~="dead" then pcall(task.cancel,thread)end end
@@ -254,12 +262,16 @@ if process.env.HUB_UI_PREVIEW_DIR then
         local sample={}
         local names={"资源收集助手","地图快捷导航","角色状态面板","画面与性能设置","采集路径标记","通用界面工具"}
         local descriptions={"资源采集 / 日常任务","地图探索 / 快捷导航","角色状态 / 任务追踪","画面调整 / 性能优化","路线标记 / 兴趣点","通用工具 / 界面管理"}
-        for index,name in ipairs(names) do table.insert(sample,{id="hall-"..index,gameId="preview",nameZh=name,nameEn="Preview "..index,scenario=descriptions[index],shortDescription="不应显示简介",enabled=true,universal=index>3,game={id="preview",nameZh="游戏布局示例",nameEn="Game Preview"},placeIds=index<=3 and {2} or {},universeIds={},aliases={},tags={}}) end
+        for index,name in ipairs(names) do table.insert(sample,{id="hall-"..index,gameId="preview",nameZh=name,nameEn="Preview "..index,scenario=descriptions[index],shortDescription="不应显示简介",requiresKey=index%3==1,enabled=true,universal=index>3,game={id="preview",nameZh="游戏布局示例",nameEn="Game Preview"},placeIds=index<=3 and {2} or {},universeIds={},aliases={},tags={}}) end
+        for i=1,4 do table.insert(sample,{id="hall-"..(i+10),gameId="other-"..i,nameZh="游戏工具"..i,nameEn="Other Script "..i,requiresKey=i%2==0,enabled=true,universal=false,game={id="other-"..i,nameZh="其他示例游戏"..i,nameEn="Other Game "..i},placeIds={100+i},universeIds={200+i},scenario="浏览预览 / 状态检查",aliases={},tags={}})end
         local cases={{"pc",1440,900,1040,720},{"tablet",1024,768,962,691},{"phone",844,390,793,311},{"landscape",667,375,627,297},{"pc-member",1440,900,1040,720,"MEMBER"},{"phone-member",844,390,793,311,"MEMBER"},{"phone-game",844,390,793,311,"GAME"}}
+        table.insert(cases,{"pc-gallery",1440,900,1040,720,"MEMBER","gallery"})
+        table.insert(cases,{"phone-gallery",844,390,793,311,"MEMBER","gallery"})
         local output=process.env.HUB_UI_PREVIEW_DIR
         fs.writeDir(output)
         for _,screen in ipairs(cases) do
             local f=fixture({catalog=sample,noKey=not screen[6],kind=screen[6],gameId="preview",expiresAt="2027-04-08T16:05:33.375Z"});f.resize(screen[4],screen[5])
+            if screen[7]=="gallery" then f.byName("TabAllGames").Activated:Fire() end
             local nodes,ids={},{}
             for index,o in ipairs(f.objects) do ids[o]=index end
             local function dim(value)return value and {value.X.Scale,value.X.Offset,value.Y.Scale,value.Y.Offset} or nil end
@@ -280,6 +292,75 @@ if process.env.HUB_UI_PREVIEW_DIR then
         end
     end)
 end
+
+check("独立容器可用时不等待 PlayerGui，且实际挂载到该容器",function()
+    local f=fixture({withHui=true,withCoreGui=true,guiUnavailable=true})
+    assert(f.byName("RSZH_Hub").Parent.Name=="HiddenGui")
+    assert(f.counter.guiLookups==0 and f.counter.huiLookups==1)
+end)
+check("gethui 异常或挂载受限时逐级尝试第二隐藏容器和 PlayerGui",function()
+    local a=fixture({withHui=true,huiThrows=true,withHidden=true,withCoreGui=true})
+    assert(a.byName("RSZH_Hub").Parent.Name=="SecondaryHiddenGui")
+    local b=fixture({withHui=true,huiInvalid=true,withCoreGui=true,deniedParents={CoreGui=true}})
+    assert(b.byName("RSZH_Hub").Parent.Name=="PlayerGui")
+    local c=fixture({withHui=true,withHidden=true,withCoreGui=true,deniedParents={HiddenGui=true,SecondaryHiddenGui=true}})
+    assert(c.byName("RSZH_Hub").Parent.Name=="CoreGui")
+end)
+check("挂载完全失败时释放未挂载的 ScreenGui 并保留后台控制器",function()
+    local f=fixture({withHui=true,withHidden=true,withCoreGui=true})
+    f.destroy();f.server.deniedParents={HiddenGui=true,SecondaryHiddenGui=true,CoreGui=true,PlayerGui=true}
+    f.client()
+    assert(f.owner.alive and #f.counter.kicks==0)
+    for _,o in ipairs(f.objects)do if o.ClassName=="ScreenGui" then assert(o.destroyed,"挂载失败不遗留空根界面")end end
+    f.server.deniedParents=nil;f.owner.focus()
+    assert(f.byName("RSZH_Hub").Parent.Name=="HiddenGui" and f.counter.logins==1)
+end)
+check("鼠标移出后的 Up 不执行动作，原生完整点击仍可用",function()
+    local f=fixture()
+    local stop=f.byName("EndSession")
+    stop.InputBegan:Fire({UserInputType=rb.Enum.UserInputType.MouseButton1,Position=rb.Vector3.new(50,50,0)})
+    stop.MouseButton1Up:Fire(900,900)
+    assert(f.owner.alive and #f.counter.kicks==0)
+    stop.MouseButton1Click:Fire();assert(#f.counter.kicks==1)
+end)
+check("原始触控释放仅接受同一手指，移出和返回滑动均不误触",function()
+    local f=fixture()
+    local card=f.byName("ScriptCard_hall-7")
+    card.AbsolutePosition=rb.Vector2.new(0,0);card.AbsoluteSize=rb.Vector2.new(100,100)
+    local a={UserInputType=rb.Enum.UserInputType.Touch,Position=rb.Vector3.new(50,50,0)}
+    card.InputBegan:Fire(a)
+    card.InputEnded:Fire({UserInputType=rb.Enum.UserInputType.Touch,Position=rb.Vector3.new(50,50,0)});task.wait(0.02)
+    assert(f.counter.loads==0,"第二根手指结束不触发第一根手指")
+    a.Position=rb.Vector3.new(130,50,0);card.InputChanged:Fire(a)
+    a.Position=rb.Vector3.new(50,50,0);card.InputEnded:Fire(a);task.wait(0.02)
+    assert(f.counter.loads==0,"滑出再返回不当成点击")
+    local edge={UserInputType=rb.Enum.UserInputType.Touch,Position=rb.Vector3.new(98,50,0)}
+    card.InputBegan:Fire(edge);edge.Position=rb.Vector3.new(102,50,0);card.InputEnded:Fire(edge);task.wait(0.02)
+    assert(f.counter.loads==0,"轻微移动但释放在按钮外也不点击")
+    local tap={UserInputType=rb.Enum.UserInputType.Touch,Position=rb.Vector3.new(50,50,0)}
+    card.InputBegan:Fire(tap);tap.Position=rb.Vector3.new(53,51,0);card.InputEnded:Fire(tap)
+    untilTrue(function()return f.counter.starts==1 end)
+    assert(f.counter.loads==1)
+end)
+check("焦点丢失、视图隐藏、禁用或滚动后的触控释放不执行",function()
+    for _,mode in ipairs({"focus","hidden","disabled","scroll"})do
+        local f=fixture();local card=f.byName("ScriptCard_hall-7")
+        local tap={UserInputType=rb.Enum.UserInputType.Touch,Position=rb.Vector3.new(50,50,0)}
+        card.InputBegan:Fire(tap)
+        if mode=="focus" then f.inputService.WindowFocusReleased:Fire()
+        elseif mode=="hidden" then f.byName("HubWindow").Visible=false
+        elseif mode=="disabled" then card.Active=false
+        else f.byName("ScriptGrid").CanvasPosition=rb.Vector2.new(0,10)end
+        card.InputEnded:Fire(tap);task.wait(0.02)
+        assert(f.counter.loads==0 and #f.counter.kicks==0,mode)
+    end
+end)
+check("卡密提示缺失时显示待同步且免卡密项目仍要求 Hub Key",function()
+    local f=fixture({noKey=true})
+    assert(f.byName("KeyBadge").Text=="卡密待同步")
+    f.byName("ScriptCard_hall-7").Activated:Fire()
+    assert(f.byName("AuthPrompt").Visible and f.counter.logins==0 and f.counter.loads==0)
+end)
 
 check("缺少真实 HWID 时不以执行器名称或账号替代设备校验",function()
     local f=fixture({noHwid=true})
@@ -345,6 +426,7 @@ end)
 check("重复导航销毁的卡片不会响应残留事件",function()
     local f=fixture()
     local old=f.byName("ScriptCard_hall-7")
+    f.byName("TabAllGames").Activated:Fire()
     f.byName("GameNav_current").Activated:Fire()
     assert(old.destroyed and old.Parent==nil)
     old.Activated:Fire();old.MouseButton1Click:Fire();task.wait(0.03)
@@ -938,9 +1020,9 @@ check("支持游戏总列表切换、非当前游戏置灰禁加载与执行次�
     assert(navPart("GameNav_current","NavIcon").Image=="rbxthumb://type=GameIcon&id=1&w=150&h=150")
     assert(navPart("GameNav_other","NavIcon").Image=="rbxthumb://type=GameIcon&id=88&w=150&h=150")
     assert(cardPart("hall-7","LoadCount").Text=="已执行 10 次")
-    assert(cardPart("hall-7","KeyBadge").Text=="🔑 需Key")
+    assert(cardPart("hall-7","KeyBadge").Text=="脚本需卡密")
     assert(cardPart("hall-9","LoadCount").Text=="已执行 5 次")
-    assert(cardPart("hall-9","KeyBadge").Text=="免Key")
+    assert(cardPart("hall-9","KeyBadge").Text=="脚本免卡密")
     -- 点击顶部「全部游戏」Tab 切换到 3 列全部游戏大画廊
     f.byName("TabAllGames").Activated:Fire()
     assert(f.byName("GameNavList").Visible and not f.byName("ScriptGrid").Visible and not f.byName("GameDetailCard").Visible)
@@ -960,6 +1042,7 @@ check("支持游戏总列表切换、非当前游戏置灰禁加载与执行次�
     assert(pcall(f.byName,"GameNav_current") and pcall(f.byName,"GameNav_other"))
     -- 模拟真机 AbsoluteSize 瞬时归零，验证点击进入其他游戏详情不会缩小界面
     f.resize(1040,720)
+    f.byName("TabAllGames").Activated:Fire()
     f.byName("HubViewport").AbsoluteSize=rb.Vector2.new(0,0)
     f.byName("RSZH_Hub").AbsoluteSize=rb.Vector2.new(0,0)
     f.byName("GameNav_other").Activated:Fire()
@@ -989,15 +1072,14 @@ check("支持游戏总列表切换、非当前游戏置灰禁加载与执行次�
     f.destroy();f.client()
     assert(cardPart("hall-7","LoadCount").Text=="已执行 11 次")
 end)
-check("Fluent 风格容器隔离（gethui / CoreGui）、防外部注入 UIScale 缩小与触控释放点击兼容",function()
+check("独立容器挂载、按钮缩放清理与同指触控释放兼容",function()
     local fHui=fixture({withHui=true,withCoreGui=true})
-    assert(fHui.counter.guiLookups==1 and fHui.counter.huiLookups==1,"优先挂载到 gethui 隔离容器，避免被游戏 PlayerGui 脚本劫持")
+    assert(fHui.counter.guiLookups==0 and fHui.counter.huiLookups==1,"优先挂载到 gethui 隔离容器，避免被游戏 PlayerGui 脚本劫持")
     local fCore=fixture({withCoreGui=true,noKey=true})
-    assert(fCore.counter.guiLookups==1)
+    assert(fCore.counter.guiLookups==0)
     local validate=fCore.byName("ValidateKey")
-    assert(validate.AutoButtonColor==false,"禁用原生自动缩放变色")
+    assert(validate.AutoButtonColor==false,"关闭原生自动变色效果")
     -- 模拟游戏脚本向按钮强行注入 UIScale 试图在点击时缩小按钮
-    local injectedScale=fCore.objects[1]
     local rogueScale=rb.Instance.new("UIScale")
     assert(rogueScale.ClassName=="UIScale")
     local fakeScale={ClassName="UIScale",destroyed=false,Destroy=function(self)self.destroyed=true end}
@@ -1005,18 +1087,21 @@ check("Fluent 风格容器隔离（gethui / CoreGui）、防外部注入 UIScale
     assert(fakeScale.destroyed,"外部向按钮注入的 UIScale 应被立即销毁，防止点击缩小")
     -- 模拟移动端执行器仅触发 InputBegan + InputEnded（不触发 Activated）的场景
     fCore.byName("KeyInput").Text="RSH_"..string.rep("a",43)
-    validate.InputBegan:Fire({UserInputType=rb.Enum.UserInputType.Touch,Position=rb.Vector3.new(50,50,0)})
+    local tap={UserInputType=rb.Enum.UserInputType.Touch,Position=rb.Vector3.new(50,50,0)}
+    validate.InputBegan:Fire(tap)
     assert(fCore.counter.logins==0,"仅按下时不触发")
-    validate.InputEnded:Fire({UserInputType=rb.Enum.UserInputType.Touch,Position=rb.Vector3.new(54,52,0)})
+    tap.Position=rb.Vector3.new(54,52,0);validate.InputEnded:Fire(tap)
     untilTrue(function()return fCore.counter.logins==1 end)
     -- 模拟按下后大幅滑动（超过24px），释放时不误触点击
     local tabAll=fCore.byName("TabAllGames")
-    tabAll.InputBegan:Fire({UserInputType=rb.Enum.UserInputType.Touch,Position=rb.Vector3.new(100,100,0)})
-    tabAll.InputEnded:Fire({UserInputType=rb.Enum.UserInputType.Touch,Position=rb.Vector3.new(160,160,0)})
+    local slide={UserInputType=rb.Enum.UserInputType.Touch,Position=rb.Vector3.new(100,100,0)}
+    tabAll.InputBegan:Fire(slide)
+    slide.Position=rb.Vector3.new(160,160,0);tabAll.InputChanged:Fire(slide);tabAll.InputEnded:Fire(slide)
     assert(not fCore.byName("GameNavList").Visible,"大幅滑动释放不误触按钮")
     -- 正常原地释放切换 Tab
-    tabAll.InputBegan:Fire({UserInputType=rb.Enum.UserInputType.Touch,Position=rb.Vector3.new(100,100,0)})
-    tabAll.InputEnded:Fire({UserInputType=rb.Enum.UserInputType.Touch,Position=rb.Vector3.new(102,101,0)})
+    local tabTap={UserInputType=rb.Enum.UserInputType.Touch,Position=rb.Vector3.new(100,100,0)}
+    tabAll.InputBegan:Fire(tabTap)
+    tabTap.Position=rb.Vector3.new(102,101,0);tabAll.InputEnded:Fire(tabTap)
     assert(fCore.byName("GameNavList").Visible,"触控原地释放正常切换全部游戏画廊")
 end)
 print("通过："..passed.." 项界面/监控解耦、原样加载、授权失效断开与竞态回归；Kick 为本地替身")
