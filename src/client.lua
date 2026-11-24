@@ -311,7 +311,7 @@ local function buildView(uiContext)
     -- The workspace stays horizontal; main stage switches between Current/Game Detail and All Games Gallery.
     local panel = rounded(object("Frame", {
         Name = "HubWindow", AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
-        Size = UDim2.fromOffset(700, 340), BackgroundColor3 = colors.canvas, BorderSizePixel = 0,
+        Size = UDim2.fromOffset(700, 396), BackgroundColor3 = colors.canvas, BorderSizePixel = 0,
         ClipsDescendants = true, Visible = true,
     }, viewport), 16)
     outline(panel)
@@ -337,10 +337,14 @@ local function buildView(uiContext)
     local keyBox = input(authorization, "KeyInput", "请输入 Key")
     local loginButton = button(authorization, "ValidateKey", "校验 Key", true)
     loginButton.ZIndex = 6
-    local kindLabel = text(authorization, "EntitlementKind", "", 14)
-    kindLabel.Font = Enum.Font.GothamMedium
+    local kindLabel = text(authorization, "EntitlementKind", "", 15)
+    kindLabel.Font = Enum.Font.GothamBold
     local expiryLabel = text(authorization, "ExpiryLabel", "剩余有效期", 11, colors.muted)
     local expiryValue = text(authorization, "ExpiryValue", "", 13)
+    expiryValue.Font = Enum.Font.GothamMedium
+    local expiryDateLabel = text(authorization, "ExpiryDateLabel", "到期时间", 11, colors.muted)
+    local expiryDateValue = text(authorization, "ExpiryDateValue", "", 12, colors.text)
+    expiryDateValue.Font = Enum.Font.GothamMedium
     local grantNote = text(authorization, "GrantNote", "", 11, colors.muted)
 
     -- 右侧主舞台顶部导航栏：当前游戏 Tab | 全部支持游戏 (N款) Tab + 全局搜索框
@@ -564,14 +568,18 @@ local function buildView(uiContext)
     end
     local function updateRemaining()
         if not entitlement then return end
-        local seconds = nil
+        local seconds, millis = nil, nil
         if entitlement.expiresAt ~= nil then
             local ok, value = pcall(function()
-                return (DateTime.fromIsoDate(entitlement.expiresAt).UnixTimestampMillis - DateTime.now().UnixTimestampMillis) / 1000
+                local expMillis = DateTime.fromIsoDate(entitlement.expiresAt).UnixTimestampMillis
+                millis = expMillis
+                return (expMillis - DateTime.now().UnixTimestampMillis) / 1000
             end)
             seconds = ok and value or "invalid"
+            if not ok then millis = "invalid" end
         end
         expiryValue.Text = Runtime.remaining(seconds)
+        expiryDateValue.Text = Runtime.expiryDateText(entitlement.expiresAt, millis)
     end
     local fit
     connect(gameImage:GetPropertyChangedSignal("IsLoaded"), function() gamePlaceholder.Visible = not gameImage.IsLoaded end)
@@ -584,11 +592,14 @@ local function buildView(uiContext)
         loginButton.Text = loginBusy and "正在校验…" or "校验 Key"
         authBadge.Text = not owner.alive and "已结束" or (verified and "已校验" or (loginBusy and "校验中" or "未校验"))
         authBadge.TextColor3 = verified and colors.success or colors.muted
-        kindLabel.Visible, expiryLabel.Visible, expiryValue.Visible, grantNote.Visible = verified, verified, verified, verified
+        kindLabel.Visible, expiryLabel.Visible, expiryValue.Visible = verified, verified, verified
+        expiryDateLabel.Visible, expiryDateValue.Visible, grantNote.Visible = verified, verified, verified
         if verified then
-            kindLabel.Text = entitlement.kind == "MEMBER" and "全游戏会员" or "单游戏 · 30 天"
+            local isMember = entitlement.kind == "MEMBER"
+            kindLabel.Text = isMember and "👑 全游戏会员 VIP" or "🎮 单游戏 · 30 天"
+            kindLabel.TextColor3 = isMember and colors.accent or colors.text
             updateRemaining()
-            grantNote.Text = entitlement.kind == "MEMBER" and "当前游戏及通用脚本\n关闭界面仍持续校验" or "仅限绑定游戏\n关闭界面仍持续校验"
+            grantNote.Text = isMember and "当前游戏及通用脚本\n关闭界面仍持续校验" or "仅限绑定游戏\n关闭界面仍持续校验"
         end
         local inGallery = currentMode == "gallery"
         local isCurrentActive = not inGallery and activeGroup and activeGroup.isCurrent
@@ -703,17 +714,19 @@ local function buildView(uiContext)
         local sidebarWidth = layout.left - pad - 12
         local inner = sidebarWidth - 24
         local authTop = layout.mainTop
-        local authHeight = layout.compact and 196 or 224
+        local authHeight = layout.compact and 206 or 232
         place(authorization, pad, authTop, sidebarWidth, authHeight)
         place(authTitle, 12, 12, inner - 54, 20)
         place(authBadge, 12 + inner - 54, 12, 54, 20)
         place(status, 12, layout.compact and 36 or 44, inner, layout.compact and 44 or 48)
         place(keyBox, 12, layout.compact and 88 or 104, inner, 44)
         place(loginButton, 12, layout.compact and 140 or 160, inner, 44)
-        place(kindLabel, 12, layout.compact and 44 or 50, inner, 24)
-        place(expiryLabel, 12, layout.compact and 78 or 90, inner, 18)
-        place(expiryValue, 12, layout.compact and 102 or 114, inner, 24)
-        place(grantNote, 12, layout.compact and 140 or 158, inner, 40)
+        place(kindLabel, 12, layout.compact and 38 or 44, inner, 22)
+        place(expiryLabel, 12, layout.compact and 66 or 74, inner, 16)
+        place(expiryValue, 12, layout.compact and 84 or 92, inner, 20)
+        place(expiryDateLabel, 12, layout.compact and 108 or 118, inner, 16)
+        place(expiryDateValue, 12, layout.compact and 126 or 136, inner, 20)
+        place(grantNote, 12, layout.compact and 154 or 168, inner, 40)
 
         -- 右侧主舞台顶部：当前游戏 Tab | 全部支持游戏 Tab | 全局搜索框
         local tab1W = layout.compact and 92 or 104
@@ -741,14 +754,18 @@ local function buildView(uiContext)
 
         -- 右侧视图 1：脚本三列网格区
         place(list, layout.left, layout.gridTop, layout.mainWidth, layout.gridHeight)
-        universalSection.root.Visible = showUniversal
+        universalSection.root.Visible = layout.showUniversalSection
         for index, sec in ipairs({currentSection, universalSection}) do
             local height = index == 1 and layout.currentHeight or layout.universalHeight
-            place(sec.root, 0, index == 1 and 0 or layout.currentHeight + 16, layout.mainWidth - 4, height)
-            place(sec.title, 0, 0, layout.mainWidth - 100, 22)
-            place(sec.count, layout.mainWidth - 96, 2, 88, 20)
-            place(sec.content, 0, 32, layout.mainWidth - 4, height - 32)
-            place(sec.empty, 0, 32, layout.mainWidth - 8, 44)
+            local showHeader = index == 1 and layout.showCurrentHeader or true
+            local contentTop = showHeader and 26 or 0
+            place(sec.root, 0, index == 1 and 0 or layout.currentHeight + 12, layout.mainWidth - 4, height)
+            place(sec.title, 0, 0, layout.mainWidth - 100, 20)
+            place(sec.count, layout.mainWidth - 96, 0, 88, 20)
+            sec.title.Visible = showHeader
+            sec.count.Visible = showHeader
+            place(sec.content, 0, contentTop, layout.mainWidth - 4, math.max(0, height - contentTop))
+            place(sec.empty, 0, contentTop, layout.mainWidth - 8, 44)
             sec.grid.CellSize = UDim2.fromOffset(layout.cellWidth, layout.cardHeight)
             sec.grid.FillDirectionMaxCells = layout.columns
             sec.count.Text = tostring(sec.size) .. " 个"

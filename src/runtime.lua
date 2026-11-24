@@ -75,7 +75,7 @@ end
 -- 格式化脚本是否需要 Key（原脚本自带卡密）的标识文案
 function Runtime.keyBadgeText(script)
     if type(script) ~= "table" or type(script.requiresKey) ~= "boolean" then return "卡密待同步" end
-    return script.requiresKey and "脚本需卡密" or "脚本免卡密"
+    return script.requiresKey and "🔑 需Key" or "免Key"
 end
 
 -- 提取支持的游戏总列表（可按关键字搜索过滤），以及当前游戏的专属与通用脚本分组
@@ -165,26 +165,28 @@ function Runtime.layout(availableWidth, availableHeight, count, universalCount, 
     availableWidth = math.max(1, tonumber(availableWidth) or 600)
     availableHeight = math.max(1, tonumber(availableHeight) or 560)
     local width = math.max(700, math.min(1040, availableWidth))
-    local height = math.max(340, math.min(720, availableHeight, math.floor(width * 0.7)))
+    local height = math.max(396, math.min(720, availableHeight, math.floor(width * 0.7)))
     local scale = math.min(1, availableWidth / width, availableHeight / height)
     count = math.max(0, tonumber(count) or 0)
     universalCount = math.max(0, tonumber(universalCount) or 0)
     gameNavCount = math.max(0, tonumber(gameNavCount) or 0)
     if showUniversal == nil then showUniversal = true end
     local compact = width < 900 or height < 580
-    local pad, gap, cardHeight = 20, 12, compact and 148 or 160
+    local pad, gap, cardHeight = 20, 12, compact and 144 or 160
     local left = compact and 220 or 256
     local mainWidth = width - left - pad
     local columns = 3
     local cellWidth = math.floor((mainWidth - 8 - gap * (columns - 1)) / columns)
-    local function sectionHeight(items)
+    local function sectionHeight(items, showHeader)
+        local headerH = showHeader and 26 or 0
         local sectionRows = math.ceil(math.max(0, tonumber(items) or 0) / columns)
-        return 32 + (sectionRows > 0 and sectionRows * cardHeight + (sectionRows - 1) * gap + 4 or 44)
+        return headerH + (sectionRows > 0 and sectionRows * cardHeight + (sectionRows - 1) * gap + 4 or 44)
     end
-    local currentHeight = sectionHeight(count)
-    local universalHeight = showUniversal and sectionHeight(universalCount) or 0
-    local gridContentHeight = showUniversal and (currentHeight + 16 + universalHeight) or currentHeight
-    local mainTop = compact and 58 or 70
+    local showCurrentHeader = universalCount > 0 or count == 0
+    local currentHeight = sectionHeight(count, showCurrentHeader)
+    local universalHeight = (showUniversal and universalCount > 0) and sectionHeight(universalCount, true) or (showUniversal and count == 0 and sectionHeight(0, true) or 0)
+    local gridContentHeight = universalHeight > 0 and (currentHeight + 12 + universalHeight) or currentHeight
+    local mainTop = compact and 68 or 76
     local navBarHeight = 44
     local detailTop = mainTop + navBarHeight + 8
     local detailHeight = compact and 64 or 72
@@ -199,8 +201,9 @@ function Runtime.layout(availableWidth, availableHeight, count, universalCount, 
         cardHeight = cardHeight, compact = compact, left = left, mainWidth = mainWidth,
         mainTop = mainTop, navBarHeight = navBarHeight, detailTop = detailTop, detailHeight = detailHeight,
         gridTop = gridTop, columns = columns, cellWidth = cellWidth,
+        showCurrentHeader = showCurrentHeader, showUniversalSection = universalHeight > 0,
         gridContentHeight = gridContentHeight, currentHeight = currentHeight, universalHeight = universalHeight, footerY = footerY,
-        gridHeight = footerY - gridTop - 10,
+        gridHeight = footerY - gridTop - 6,
         gameCardHeight = gameCardHeight, galleryTop = galleryTop, galleryHeight = galleryHeight,
         galleryContentHeight = galleryContentHeight }
 end
@@ -220,6 +223,29 @@ function Runtime.remaining(seconds)
     if seconds >= 3600 then return "剩余 " .. math.floor(seconds / 3600) .. " 小时" end
     if seconds >= 60 then return "剩余 " .. math.floor(seconds / 60) .. " 分钟" end
     return "剩余不足 1 分钟"
+end
+
+-- 将 ISO 时间或毫秒时间戳格式化为北京时间（UTC+8）YYYY-MM-DD HH:mm 供授权卡片展示
+function Runtime.expiryDateText(expiresAt, unixMillis)
+    if expiresAt == nil then return "长期有效" end
+    if type(unixMillis) ~= "number" or unixMillis ~= unixMillis or math.abs(unixMillis) == math.huge then
+        return "时间待同步"
+    end
+    local totalMinutes = math.floor(unixMillis / 60000) + 480
+    local minute = totalMinutes % 60
+    local totalHours = math.floor(totalMinutes / 60)
+    local hour = totalHours % 24
+    local z = math.floor(totalHours / 24) + 719468
+    local era = math.floor((z >= 0 and z or z - 146096) / 146097)
+    local doe = z - era * 146097
+    local yoe = math.floor((doe - math.floor(doe / 1460) + math.floor(doe / 36524) - math.floor(doe / 146096)) / 365)
+    local y = yoe + era * 400
+    local doy = doe - (365 * yoe + math.floor(yoe / 4) - math.floor(yoe / 100))
+    local mp = math.floor((5 * doy + 2) / 153)
+    local d = doy - math.floor((153 * mp + 2) / 5) + 1
+    local m = mp + (mp < 10 and 3 or -9)
+    if m <= 2 then y = y + 1 end
+    return string.format("%04d-%02d-%02d %02d:%02d", y, m, d, hour, minute)
 end
 
 function Runtime.currentGame(scripts, universeId, placeId)

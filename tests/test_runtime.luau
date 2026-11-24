@@ -6,6 +6,9 @@ for _,case in ipairs({{172800,"剩余 2 天"},{86400,"剩余 1 天"},{86399,"剩
 end
 assert(Runtime.remaining(nil)=="长期有效")
 for _,value in ipairs({"bad",0/0,math.huge,-math.huge})do assert(Runtime.remaining(value)=="时间待同步")end
+assert(Runtime.expiryDateText(nil, nil) == "长期有效")
+assert(Runtime.expiryDateText("2027-04-08T16:05:33.375Z", 1807200333375) == "2027-04-09 00:05")
+assert(Runtime.expiryDateText("invalid", "invalid") == "时间待同步")
 local gameInfo={id="demo",nameZh="中文游戏",nameEn="English Game"}
 local demo={id="script",gameId="demo",universeIds={1},placeIds={2},game=gameInfo}
 assert(Runtime.currentGame({demo},1,2)==gameInfo)
@@ -61,8 +64,8 @@ assert(Runtime.scenario({shortDescription="不要展示简介"}) == "场景信�
 assert(Runtime.loadCountText(nil) == "已执行 0 次")
 assert(Runtime.loadCountText(15) == "已执行 15 次")
 assert(Runtime.loadCountText(-3) == "已执行 0 次")
-assert(Runtime.keyBadgeText({requiresKey = true}) == "脚本需卡密")
-assert(Runtime.keyBadgeText({requiresKey = false}) == "脚本免卡密")
+assert(Runtime.keyBadgeText({requiresKey = true}) == "🔑 需Key")
+assert(Runtime.keyBadgeText({requiresKey = false}) == "免Key")
 assert(Runtime.keyBadgeText({}) == "卡密待同步")
 assert(Runtime.keyBadgeText({requiresKey = "false"}) == "卡密待同步")
 assert(Runtime.keyBadgeText(nil) == "卡密待同步")
