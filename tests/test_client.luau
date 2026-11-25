@@ -811,6 +811,40 @@ check("加载 CTA 的校验和运行状态保留单次按需加载",function()
     task.wait(0.02)
     assert(f.counter.loads==1 and f.counter.starts==1 and f.counter.sources[1]==originalSource)
 end)
+check("游戏画廊双语标题、图片和底栏在三端边界内分离",function()
+    local scripts={{id="hall-7",gameId="demo",nameZh="当前工具",nameEn="Current Tool",scenario="当前场景",enabled=true,placeIds={2},universeIds={},tags={},aliases={},game={id="demo",nameZh=string.rep("当前游戏长标题",8),nameEn="Long Current Game"}}}
+    for i=1,20 do table.insert(scripts,{id="hall-"..(i+10),gameId="other-"..i,nameZh="其他工具"..i,nameEn="Other Tool",enabled=true,placeIds={100+i},universeIds={},tags={},aliases={},game={id="other-"..i,nameZh=string.rep("其他游戏长标题",8),nameEn="Long Other Game"}})end
+    local f=fixture({catalog=scripts,noKey=true})
+    f.byName("TabAllGames").Activated:Fire()
+    for _,size in ipairs({{1040,720},{962,691},{900,580},{900,579},{899,629},{793,311},{627,297},{640,300}})do
+        f.resize(size[1],size[2])
+        local grid=f.byName("GameGalleryLayout")
+        local cell=grid.CellSize
+        assert(grid.FillDirectionMaxCells==3 and cell.X.Offset>0)
+        for _,id in ipairs({"GameNav_current","GameNav_other-1"})do
+            local nav=f.byName(id)
+            local parts={}
+            for _,node in ipairs(f.objects)do if not node.destroyed and node.Parent==nav then parts[node.Name]=node end end
+            for _,name in ipairs({"NavIcon","NavBadge","NavTitle","NavNameEn","NavSub","NavEnter"})do
+                local part=parts[name]
+                assert(part.Position.X.Offset>=0 and part.Position.Y.Offset>=0)
+                assert(part.Position.X.Offset+part.Size.X.Offset<=cell.X.Offset)
+                assert(part.Position.Y.Offset+part.Size.Y.Offset<=cell.Y.Offset)
+            end
+            assert(parts.NavTitle.TextWrapped and parts.NavTitle.Size.Y.Offset>=30)
+            assert(parts.NavBadge.Position.Y.Offset+parts.NavBadge.Size.Y.Offset<=parts.NavTitle.Position.Y.Offset)
+            assert(parts.NavTitle.Position.Y.Offset+parts.NavTitle.Size.Y.Offset<=parts.NavNameEn.Position.Y.Offset)
+            assert(parts.NavNameEn.Position.Y.Offset+parts.NavNameEn.Size.Y.Offset<=parts.NavSub.Position.Y.Offset)
+            assert(parts.NavIcon.Position.X.Offset+parts.NavIcon.Size.X.Offset<=parts.NavTitle.Position.X.Offset)
+            assert(parts.NavIcon.Position.Y.Offset+parts.NavIcon.Size.Y.Offset<=parts.NavSub.Position.Y.Offset)
+        end
+        local list=f.byName("GameNavList")
+        local rows=math.ceil(21/3)
+        assert(list.CanvasSize.Y.Offset>=rows*cell.Y.Offset+(rows-1)*12,"末行画廊卡片滚动范围完整")
+        assert(list.Size.Y.Offset>=cell.Y.Offset+4,"至少一排游戏卡片完整可见")
+    end
+    assert(f.counter.logins==0 and f.counter.loads==0,"浏览画廊和调整尺寸只读元数据")
+end)
 check("ZS 品牌与 f0644b 主题色保持一致",function()
     local f=fixture()
     local accent=rb.Color3.fromRGB(240,100,75)
@@ -1083,6 +1117,7 @@ check("支持游戏总列表切换、非当前游戏置灰禁加载与执行次�
     end
     assert(navPart("GameNav_current","NavIcon").Image=="rbxthumb://type=GameIcon&id=1&w=150&h=150")
     assert(navPart("GameNav_other","NavIcon").Image=="rbxthumb://type=GameIcon&id=88&w=150&h=150")
+    assert(navPart("GameNav_current","NavTitle").TextWrapped and navPart("GameNav_current","NavTitle").Size.Y.Offset>=30,"全部游戏卡片标题支持两行换行展示")
     assert(cardPart("hall-7","LoadCount").Text=="已执行 10 次")
     assert(cardPart("hall-7","KeyBadge").Text=="🔑 需Key")
     assert(cardPart("hall-9","LoadCount").Text=="已执行 5 次")

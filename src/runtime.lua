@@ -192,7 +192,7 @@ function Runtime.layout(availableWidth, availableHeight, count, universalCount, 
     local detailHeight = compact and 64 or 72
     local gridTop = detailTop + detailHeight + 8
     local footerY = height - 52
-    local gameCardHeight = compact and 104 or 116
+    local gameCardHeight = compact and 112 or 124
     local gameRows = math.ceil(gameNavCount / columns)
     local galleryTop = mainTop + navBarHeight + 8
     local galleryHeight = footerY - galleryTop - 10

@@ -800,7 +800,9 @@ local function buildView(uiContext)
         gameGalleryGrid.FillDirectionMaxCells = layout.columns
         place(gameNavEmpty, 12, 16, layout.mainWidth - 24, 32)
         gameNavEmpty.Visible = #navButtons == 0
-        local iconSize = layout.compact and 50 or 58
+        local iconSize = layout.compact and 54 or 62
+        local titleH = layout.compact and 30 or 32
+        local enTop = 26 + titleH + 2
         for _, navBtn in ipairs(navButtons) do
             local np = navParts[navBtn]
             place(np.bar, 0, 12, 3, layout.gameCardHeight - 24)
@@ -808,12 +810,12 @@ local function buildView(uiContext)
             place(np.icon, 12, 12, iconSize, iconSize)
             local textLeft = 12 + iconSize + 10
             local textW = math.max(50, layout.cellWidth - textLeft - 10)
-            place(np.badge, textLeft, 10, textW, 16)
-            place(np.title, textLeft, 28, textW, 20)
-            place(np.nameEn, textLeft, 48, textW, 16)
+            place(np.badge, textLeft, 10, textW, 14)
+            place(np.title, textLeft, 26, textW, titleH)
+            place(np.nameEn, textLeft, enTop, textW, 14)
             local sW = math.floor((layout.cellWidth - 24) * 0.54)
-            place(np.sub, 12, layout.gameCardHeight - 28, sW, 18)
-            place(np.enterLabel, 12 + sW, layout.gameCardHeight - 28, layout.cellWidth - 24 - sW, 18)
+            place(np.sub, 12, layout.gameCardHeight - 26, sW, 18)
+            place(np.enterLabel, 12 + sW, layout.gameCardHeight - 26, layout.cellWidth - 24 - sW, 18)
         end
         gameNavList.CanvasSize = UDim2.fromOffset(0, layout.galleryContentHeight)
         gameNavList.ScrollingEnabled = true
@@ -969,9 +971,9 @@ local function buildView(uiContext)
             local bLabel = text(btn, "NavBadge", grp.isCurrent and "● 当前游戏" or "支持游戏", 11, grp.isCurrent and colors.accent or colors.muted)
             bLabel.Font = Enum.Font.GothamMedium
             bLabel.TextWrapped = false
-            local tLabel = text(btn, "NavTitle", grp.nameZh, 14, colors.text)
+            local tLabel = text(btn, "NavTitle", grp.nameZh, 13, colors.text)
             tLabel.Font = Enum.Font.GothamBold
-            tLabel.TextWrapped = false
+            tLabel.TextWrapped = true
             local enLabel = text(btn, "NavNameEn", grp.nameEn or "", 11, colors.muted)
             enLabel.TextWrapped = false
             local scriptTotal = #grp.scripts + (grp.universalScripts and #grp.universalScripts or 0)
