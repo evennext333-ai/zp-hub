@@ -158,7 +158,13 @@ local function fixture(options)
     environment.os=table.clone(os)
     environment.os.clock=function()return os.clock()*(options.fastHeartbeats and 80 or 1)+clockShift end
     local entry={id="hall-7",gameId="demo",nameZh="授权检查",nameEn="Check",enabled=true,universal=false,lifecycle="managed",placeIds={2},universeIds={1},tags={},aliases={},scenario="授权连接 / 状态检查",shortDescription="不应显示这段简介"}
+    if options.fallbackApi then environment.FALLBACK_API = options.fallbackApi end
+    counter.urls = {}
     environment.request=function(args)
+        table.insert(counter.urls, args.Url)
+        if options.primaryNetworkDown and args.Url:find("https://TARGET", 1, true) == 1 then
+            return { StatusCode = 0, Body = "" }
+        end
         if not args.Body then assert(args.Headers["Content-Type"]==nil,"空正文请求不声明 JSON") end
         local data, err, status
         if args.Url:find("/catalog",1,true) then
@@ -1229,6 +1235,20 @@ check("独立容器挂载、按钮缩放清理与同指触控释放兼容",funct
     tabAll.InputBegan:Fire(tabTap)
     tabTap.Position=rb.Vector3.new(102,101,0);tabAll.InputEnded:Fire(tabTap)
     assert(fCore.byName("GameNavList").Visible,"触控原地释放正常切换全部游戏画廊")
+end)
+check("主入口网络不可达时自动切换海外 Cloudflare 备用入口并记住可用线路",function()
+    local fallback="https://zs-hub-api.zs-hub-edge.workers.dev"
+    local f=fixture({fallbackApi=fallback,primaryNetworkDown=true})
+    untilTrue(function()return f.counter.logins==1 and f.counter.catalogs==1 end)
+    assert(f.find("授权有效") and #f.counter.kicks==0)
+    f.play()
+    untilTrue(function()return f.counter.starts==1 end)
+    assert(f.counter.loads==1 and #f.counter.kicks==0)
+    local loadUrl
+    for _,url in ipairs(f.counter.urls) do
+        if url:find("/load",1,true) then loadUrl=url end
+    end
+    assert(loadUrl and loadUrl:find(fallback,1,true)==1,"切换成功后后续加载直走可用备用入口")
 end)
 print("通过："..passed.." 项界面/监控解耦、原样加载、授权失效断开与竞态回归；Kick 为本地替身")
 

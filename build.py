@@ -11,6 +11,7 @@ from urllib.parse import urlsplit
 
 ROOT = Path(__file__).resolve().parent
 DEFAULT_API_URL = "https://www.zldelf.cloud/api"
+DEFAULT_FALLBACK_API_URL = "https://zs-hub-api.zs-hub-edge.workers.dev"
 PROMETHEUS_COMMIT = "a98c50165f2a53f6d765a82eee60dfea53803445"
 PUBLIC_ASSETS = ("loader.lua", "keys.html", "keys.js", "keys.css")
 
@@ -50,8 +51,11 @@ def obfuscate(loader, tool, lua):
     generated.replace(loader)
 
 
-def build(api, output, prometheus_dir=None, lua="lua5.1"):
+def build(api, output, prometheus_dir=None, lua="lua5.1", fallback_api=DEFAULT_FALLBACK_API_URL):
     api = api_url(api)
+    fallback = api_url(fallback_api) if fallback_api else ""
+    if fallback == api:
+        fallback = ""
     output = Path(output).resolve()
     if output.exists():
         raise ValueError("发布目录已存在，请使用新目录，保留旧版本用于回滚")
@@ -63,7 +67,9 @@ def build(api, output, prometheus_dir=None, lua="lua5.1"):
     try:
         runtime = (ROOT / "src/runtime.lua").read_text(encoding="utf-8")
         client = (ROOT / "src/client.lua").read_text(encoding="utf-8")
+        fallback_line = ("\nlocal FALLBACK_API = " + lua_literal(fallback)) if fallback else ""
         loader = ("-- 国内 Hub，构建版本 " + version + "\nlocal API = " + lua_literal(api)
+                  + fallback_line
                   + "\nlocal Runtime = (function()\n" + runtime + "\nend)()\n" + client)
         (staging / "loader.lua").write_text(loader, encoding="utf-8")
         if prometheus_dir is not None:
@@ -71,6 +77,8 @@ def build(api, output, prometheus_dir=None, lua="lua5.1"):
         for asset in PUBLIC_ASSETS[1:]:
             shutil.copyfile(ROOT / "src" / asset, staging / asset)
         metadata = {"version": version, "api": api, "files": {}}
+        if fallback:
+            metadata["fallbackApi"] = fallback
         for asset in PUBLIC_ASSETS:
             body = (staging / asset).read_bytes()
             limit = 2 * 1024 * 1024 if asset == "loader.lua" else 100 * 1024
@@ -89,12 +97,13 @@ def build(api, output, prometheus_dir=None, lua="lua5.1"):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--api-url", default=DEFAULT_API_URL)
+    parser.add_argument("--fallback-api-url", default=DEFAULT_FALLBACK_API_URL)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--prometheus-dir", type=Path)
     parser.add_argument("--lua-bin", default="lua5.1")
     args = parser.parse_args()
     try:
-        metadata = build(args.api_url, args.output, args.prometheus_dir, args.lua_bin)
+        metadata = build(args.api_url, args.output, args.prometheus_dir, args.lua_bin, args.fallback_api_url)
         print(f"Hub {metadata['version']} 已构建：{args.output.resolve()}")
     except (OSError, ValueError, subprocess.SubprocessError) as error:
         parser.exit(1, f"构建失败：{error}\n")

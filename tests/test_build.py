@@ -20,6 +20,7 @@ class BuildTests(unittest.TestCase):
             build.build(build.DEFAULT_API_URL, output)
             source = (output / "loader.lua").read_text()
             self.assertIn('local API = [[https://www.zldelf.cloud]]', source)
+            self.assertIn(f'local FALLBACK_API = [[{build.DEFAULT_FALLBACK_API_URL}]]', source)
             self.assertNotIn("/api/api", source)
 
     def test_public_bundle_has_only_static_assets_and_checked_metadata(self):

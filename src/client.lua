@@ -73,20 +73,25 @@ local function terminate(message)
     endSession(message)
 end
 
-local function api(method, path, body, bearer, allowClosed)
+local activeApi = API
+local fallbackApi = (type(FALLBACK_API) == "string" and FALLBACK_API ~= "" and FALLBACK_API ~= API) and FALLBACK_API or nil
+local catalogBusy = false
+local loadCatalog
+
+local function sendRequest(baseUrl, method, path, body, bearer, allowClosed, timeoutSeconds)
     local finished, response = false, nil
     local started = os.clock()
     local thread = task.spawn(function()
         local headers = {}
         if body then headers["Content-Type"] = "application/json" end
         if bearer then headers.Authorization = "Bearer " .. bearer end
-        local args = { Url = API .. path, Method = method, Headers = headers }
+        local args = { Url = baseUrl .. path, Method = method, Headers = headers }
         if body then args.Body = Http:JSONEncode(body) end
         local ok, result = pcall(requestFn, args)
         if ok and type(result) == "table" then response = result end
         finished = true
     end)
-    while not finished and (owner.alive or allowClosed) and os.clock() - started < 20 do task.wait(0.05) end
+    while not finished and (owner.alive or allowClosed) and os.clock() - started < timeoutSeconds do task.wait(0.05) end
     if not finished then
         pcall(task.cancel, thread)
         return nil, "NETWORK_ERROR", started
@@ -98,6 +103,21 @@ local function api(method, path, body, bearer, allowClosed)
     if not ok or type(decoded) ~= "table" then return nil, "INVALID_RESPONSE", started end
     if code >= 200 and code < 300 and decoded.success == true then return decoded.data, nil, started end
     return nil, type(decoded.error) == "table" and decoded.error.code or "REQUEST_FAILED", started
+end
+
+local function api(method, path, body, bearer, allowClosed)
+    local current = activeApi
+    local primaryTimeout = fallbackApi and 12 or 20
+    local data, err, sent = sendRequest(current, method, path, body, bearer, allowClosed, primaryTimeout)
+    if err == "NETWORK_ERROR" and fallbackApi and (owner.alive or allowClosed) then
+        local alternate = (current == API) and fallbackApi or API
+        local altData, altErr, altSent = sendRequest(alternate, method, path, body, bearer, allowClosed, 15)
+        if altErr ~= "NETWORK_ERROR" then
+            activeApi = alternate
+            return altData, altErr, altSent
+        end
+    end
+    return data, err, sent
 end
 
 local function logout(oldToken)
@@ -159,6 +179,7 @@ login = function(inputKey)
     entitlement = { kind = data.kind, gameId = data.gameId, expiresAt = data.entitlementExpiresAt }
     requestSequence = 0
     setStatus("授权有效 · " .. (data.kind == "MEMBER" and "全游戏会员" or "单游戏 30 天"))
+    if #catalog == 0 and loadCatalog then task.spawn(loadCatalog) end
     return true
 end
 
@@ -1130,19 +1151,25 @@ task.spawn(function()
         task.wait(0.2)
     end
 end)
+loadCatalog = function()
+    if catalogBusy or not owner.alive then return end
+    catalogBusy = true
+    local data, err = api("GET", "/api/hub/catalog")
+    catalogBusy = false
+    if not owner.alive then return end
+    if data and type(data.scripts) == "table" then
+        catalog = data.scripts
+        for _, script in ipairs(catalog) do
+            if type(script.id) == "string" and loadCounts[script.id] == nil then
+                loadCounts[script.id] = math.max(0, math.floor(tonumber(script.loadCount) or 0))
+            end
+        end
+        if view then view.render() end
+        if statusMessage == "正在获取正式目录…" then setStatus("目录已就绪；请先校验 Key，再选择脚本加载") end
+    elseif #catalog == 0 and not token then
+        setStatus("目录下载失败：" .. errorText(err))
+    end
+end
 mountUI()
 if pendingKey ~= "" then owner.submitKey(pendingKey) end
-local data, err = api("GET", "/api/hub/catalog")
-if not owner.alive then return end
-if data and type(data.scripts) == "table" then
-    catalog = data.scripts
-    for _, script in ipairs(catalog) do
-        if type(script.id) == "string" and loadCounts[script.id] == nil then
-            loadCounts[script.id] = math.max(0, math.floor(tonumber(script.loadCount) or 0))
-        end
-    end
-    if view then view.render() end
-    if statusMessage == "正在获取正式目录…" then setStatus("目录已就绪；请先校验 Key，再选择脚本加载") end
-else
-    setStatus("目录下载失败：" .. errorText(err))
-end
+loadCatalog()
