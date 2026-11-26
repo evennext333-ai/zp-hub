@@ -154,7 +154,9 @@ local function fixture(options)
     end
     if options.alternateHwid then environment.getexecutorhwid=environment.gethwid end
     if options.noHwid or options.alternateHwid then environment.gethwid=nil end
-    if options.fastHeartbeats then environment.os=table.clone(os);environment.os.clock=function()return os.clock()*80 end end
+    local clockShift = 0
+    environment.os=table.clone(os)
+    environment.os.clock=function()return os.clock()*(options.fastHeartbeats and 80 or 1)+clockShift end
     local entry={id="hall-7",gameId="demo",nameZh="授权检查",nameEn="Check",enabled=true,universal=false,lifecycle="managed",placeIds={2},universeIds={1},tags={},aliases={},scenario="授权连接 / 状态检查",shortDescription="不应显示这段简介"}
     environment.request=function(args)
         if not args.Body then assert(args.Headers["Content-Type"]==nil,"空正文请求不声明 JSON") end
@@ -205,6 +207,7 @@ local function fixture(options)
     end
     local client=luau.load(clientSource,{environment=environment})
     local f={counter=counter,server=server,env=hubEnv,objects=objects,find=find,client=client,inputService=userInput}
+    function f.advanceClock(seconds) clockShift += seconds end
     function f.byName(name)
         for _,item in ipairs(objects) do if item.Name==name and not item.destroyed then return item end end
         error("对象缺失："..name)
@@ -933,6 +936,30 @@ check("独立看门狗与晚到心跳不复活",function()
     untilTrue(function()return #f.counter.kicks==1 end)
     assert(f.counter.kicks[1]:find("租约",1,true));task.wait(0.8)
     assert(#f.counter.kicks==1 and f.counter.logins==1 and not f.env.__RSZH_HUB)
+end)
+check("关闭界面后跨过90秒网络故障仍沿300秒原租约运行",function()
+    local f=fixture({networkHeartbeat=true});f.play();f.close()
+    untilTrue(function()return f.counter.heartbeats>=1 end)
+    f.advanceClock(95);task.wait(0.1)
+    assert(f.owner.alive and #f.counter.kicks==0 and f.counter.starts==1)
+    f.advanceClock(206)
+    untilTrue(function()return #f.counter.kicks==1 end)
+    assert(not f.owner.alive and not f.env.__RSZH_HUB)
+end)
+check("跨过90秒后明确顶号错误仍立即结束而非等满租约",function()
+    local f=fixture({heartbeatError="HUB_SESSION_REPLACED"});f.close();f.advanceClock(95)
+    untilTrue(function()return #f.counter.kicks==1 end)
+    assert(not f.owner.alive and f.counter.kicks[1]:find("授权",1,true))
+end)
+check("请求跨过10秒仍等待，超过20秒才触发幂等重试",function()
+    local f=fixture({noKey=true,delayLogin=1.5})
+    f.owner.submitKey("RSH_"..string.rep("a",43))
+    untilTrue(function()return f.counter.logins==1 end)
+    f.advanceClock(11);task.wait(0.1)
+    assert(f.counter.logins==1 and f.byName("SessionStatus").Text=="正在校验授权…")
+    f.advanceClock(10)
+    untilTrue(function()return f.counter.logins==2 end)
+    assert(#f.counter.kicks==0)
 end)
 check("短暂网络失败先重试，成功后保留本局",function()
     local f=fixture({lease=4.5,networkHeartbeat=true});f.play();f.close()
