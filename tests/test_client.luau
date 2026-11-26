@@ -162,7 +162,7 @@ local function fixture(options)
     counter.urls = {}
     environment.request=function(args)
         table.insert(counter.urls, args.Url)
-        if options.primaryNetworkDown and args.Url:find("https://TARGET", 1, true) == 1 then
+        if options.primaryNetworkDown and (not options.fallbackApi or args.Url:find(options.fallbackApi, 1, true) ~= 1) then
             return { StatusCode = 0, Body = "" }
         end
         if not args.Body then assert(args.Headers["Content-Type"]==nil,"空正文请求不声明 JSON") end
