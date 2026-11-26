@@ -261,7 +261,7 @@ end
 
 function Runtime.deadline(sentAt, remaining)
     assert(type(remaining) == "number" and remaining == remaining and remaining > 0, "租约已失效")
-    return sentAt + math.min(remaining, 90)
+    return sentAt + math.min(remaining, 300)
 end
 
 return Runtime

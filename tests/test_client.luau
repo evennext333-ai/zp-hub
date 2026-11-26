@@ -18,7 +18,7 @@ local function fixture(options)
     options = options or {}
     local objects, threads = {}, {}
     local counter = {logins=0, loads=0, heartbeats=0, deletes=0, loadIds={}, catalogs=0, guiLookups=0, starts=0, cleanups=0, kicks={}, warnings={}, sources={}}
-    local server = {deniedParents=options.deniedParents,guiUnavailable=options.guiUnavailable,nowMillis=datetime.fromIsoDate("2027-04-08T16:00:00Z").unixTimestampMillis,source=options.source or originalSource, lease=options.lease or 90,
+    local server = {deniedParents=options.deniedParents,guiUnavailable=options.guiUnavailable,nowMillis=datetime.fromIsoDate("2027-04-08T16:00:00Z").unixTimestampMillis,source=options.source or originalSource, lease=options.lease or 300,
         delayLogin=options.delayLogin or 0, delayLoad=options.delayLoad or 0,
         delayHeartbeat=options.delayHeartbeat or 0, loginError=options.loginError,
         loadError=options.loadError, heartbeatError=options.heartbeatError,
@@ -170,7 +170,7 @@ local function fixture(options)
             if networkFailure then err="NETWORK_ERROR";status=503
             else err=server.heartbeatError end
             local body=serde.decode("json",args.Body)
-            data={sessionId=server.invalidHeartbeat and "another-session" or "fixture",sequence=body.sequence,remainingLeaseSeconds=90,kind=options.kind or "GAME",gameId=options.gameId or "demo",entitlementExpiresAt=options.expiresAt}
+            data={sessionId=server.invalidHeartbeat and "another-session" or "fixture",sequence=body.sequence,remainingLeaseSeconds=300,kind=options.kind or "GAME",gameId=options.gameId or "demo",entitlementExpiresAt=options.expiresAt}
         elseif args.Url:find("/load",1,true) then
             local id=args.Url:match("/api/hub/scripts/(hall%-%d+)/load$")
             local exists=false

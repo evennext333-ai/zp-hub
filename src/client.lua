@@ -86,7 +86,7 @@ local function api(method, path, body, bearer, allowClosed)
         if ok and type(result) == "table" then response = result end
         finished = true
     end)
-    while not finished and (owner.alive or allowClosed) and os.clock() - started < 10 do task.wait(0.05) end
+    while not finished and (owner.alive or allowClosed) and os.clock() - started < 20 do task.wait(0.05) end
     if not finished then
         pcall(task.cancel, thread)
         return nil, "NETWORK_ERROR", started
