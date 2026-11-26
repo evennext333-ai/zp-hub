@@ -23,7 +23,8 @@ assert(type(requestFn) == "function", "运行环境需要支持 HTTPS POST 和�
 assert(type(loadstring) == "function", "运行环境需要支持 loadstring")
 local owner = { alive = true, policy = "background-v1" }
 local token, leaseUntil, sessionId = nil, 0, nil
-local scriptStarted, loading, loginBusy, requestSequence = false, false, false, 0
+local loading, loginBusy, requestSequence = false, false, 0
+local startedScripts = {}
 local endSession, login, run, mountUI
 local view, mountingUI = nil, false
 local statusMessage = "正在获取正式目录…"
@@ -191,7 +192,6 @@ run = function(script)
     if not owner.alive then return end
     if not token then setStatus("请先校验 Key 后再加载脚本") return end
     if os.clock() >= leaseUntil then terminate("运行租约已到期") return end
-    if scriptStarted then setStatus("本局已启动脚本；切换或重载请结束本局后重新进入游戏") return end
     if loading then return end
     if not script.enabled then setStatus("此脚本仍待接入验收") return end
     if not script.universal and Runtime.rank(script, game.GameId, game.PlaceId) > 0 then
@@ -203,10 +203,11 @@ run = function(script)
     local activeToken = token
     setStatus("正在下载 " .. script.nameZh .. "…")
     local data, err = api("POST", "/api/hub/scripts/" .. script.id .. "/load", {}, activeToken)
-    if not owner.alive or token ~= activeToken then loading = false return end
-    if os.clock() >= leaseUntil then terminate("运行租约已到期") loading = false return end
+    if not owner.alive or token ~= activeToken then loading = false loadingScriptId = nil return end
+    if os.clock() >= leaseUntil then terminate("运行租约已到期") loading = false loadingScriptId = nil return end
     if not data or type(data.source) ~= "string" then
         loading = false
+        loadingScriptId = nil
         if authorizationErrors[err] then terminate("授权已失效：" .. errorText(err))
         else setStatus("加载失败：" .. errorText(err or "INVALID_RESPONSE")) end
         return
@@ -220,21 +221,24 @@ run = function(script)
     script.loadCount = loadCounts[script.id]
     refreshView()
     local compiled, fn = pcall(loadstring, data.source, "=Hub/" .. script.id)
-    if not owner.alive then loading = false return end
-    if os.clock() >= leaseUntil then terminate("运行租约已到期") loading = false return end
-    if not compiled or type(fn) ~= "function" then loading = false setStatus("脚本编译失败") return end
-    -- 原文、运行环境、参数与返回值均保持原语义；启动后通过结束本局终止使用。
-    scriptStarted = true
+    if not owner.alive then loading = false loadingScriptId = nil return end
+    if os.clock() >= leaseUntil then terminate("运行租约已到期") loading = false loadingScriptId = nil return end
+    if not compiled or type(fn) ~= "function" then loading = false loadingScriptId = nil setStatus("脚本编译失败") return end
+    -- 原文、运行环境、参数与返回值均保持原语义；支持再次点击重载或叠加运行其他脚本。
     activeScriptId = script.id
+    startedScripts[script.id] = "running"
     setStatus("正在启动 " .. script.nameZh .. "；关闭界面仍继续后台校验")
-    if not owner.alive then loading = false return end
+    if not owner.alive then loading = false loadingScriptId = nil return end
     local ok = pcall(fn)
     if not ok then
-        if owner.alive then setStatus("脚本启动异常，授权监控继续；请手动结束本局后重试") end
+        startedScripts[script.id] = "error"
+        if owner.alive then setStatus("脚本启动异常，授权监控继续；可再次点击重试") end
     elseif owner.alive then
-        setStatus("运行中：" .. script.nameZh .. "；关闭界面仍继续后台校验")
+        startedScripts[script.id] = "running"
+        setStatus("运行中：" .. script.nameZh .. "；可再次点击重载或加载其他脚本")
     end
     loading = false
+    loadingScriptId = nil
     refreshView()
 end
 
@@ -685,10 +689,17 @@ local function buildView(uiContext)
                 parts.action.BackgroundColor3 = colors.surfaceElevated
                 parts.actionStroke.Color = colors.border
             else
-                local isBlocked = not script.enabled or notGranted(script) or (scriptStarted and activeScriptId ~= script.id)
-                local isRunning = scriptStarted and activeScriptId == script.id
-                parts.action.Text = not script.enabled and "待上架" or (scriptStarted and (isRunning and "运行中" or "重新进入后切换")
-                    or (loading and loadingScriptId == script.id and "正在加载…" or (notGranted(script) and "需匹配权益" or (verified and "▶ 点击加载" or "🔑 校验后加载"))))
+                local runState = startedScripts[script.id]
+                local isLoadingThis = loading and loadingScriptId == script.id
+                local isBlocked = not script.enabled or notGranted(script)
+                local isRunning = not isBlocked and not isLoadingThis and verified and runState == "running"
+                local isErrored = not isBlocked and not isLoadingThis and verified and runState == "error"
+                parts.action.Text = not script.enabled and "待上架"
+                    or (isLoadingThis and "正在加载…"
+                        or (notGranted(script) and "需匹配权益"
+                            or (not verified and "🔑 校验后加载"
+                                or (isRunning and "运行中 · 再次加载"
+                                    or (isErrored and "启动异常 · 重试" or "▶ 点击加载")))))
                 parts.action.TextColor3 = isBlocked and colors.muted or (isRunning and colors.success or colors.accent)
                 parts.action.BackgroundColor3 = colors.surfaceElevated
                 parts.actionStroke.Color = isBlocked and colors.border or (isRunning and colors.success or colors.accent)
