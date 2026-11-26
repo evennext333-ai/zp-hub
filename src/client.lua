@@ -32,7 +32,7 @@ local catalog = {}
 local loadCounts = {}
 local selectedGroupKey = "current"
 local currentMode = "detail" -- "detail" (游戏详情+脚本页) 或 "gallery" (全部游戏大画廊海报墙)
-local entitlement, activeScriptId, loadingScriptId = nil, nil, nil
+local entitlement, activeRun, loadingScriptId = nil, nil, nil
 local errors = {
     HUB_KEY_INVALID = "Key 无效或已重置", HUB_LICENSE_REVOKED = "权益已吊销",
     HUB_LICENSE_EXPIRED = "单游戏权益已到期", HUB_VIP_REQUIRED = "会员已到期或未开通",
@@ -200,6 +200,8 @@ run = function(script)
     end
     loading = true
     loadingScriptId = script.id
+    local invocation = { state = "running" }
+    activeRun = invocation
     local activeToken = token
     setStatus("正在下载 " .. script.nameZh .. "…")
     local data, err = api("POST", "/api/hub/scripts/" .. script.id .. "/load", {}, activeToken)
@@ -224,22 +226,21 @@ run = function(script)
     if not owner.alive then loading = false loadingScriptId = nil return end
     if os.clock() >= leaseUntil then terminate("运行租约已到期") loading = false loadingScriptId = nil return end
     if not compiled or type(fn) ~= "function" then loading = false loadingScriptId = nil setStatus("脚本编译失败") return end
-    -- 原文、运行环境、参数与返回值均保持原语义；支持再次点击重载或叠加运行其他脚本。
-    activeScriptId = script.id
-    startedScripts[script.id] = "running"
-    setStatus("正在启动 " .. script.nameZh .. "；关闭界面仍继续后台校验")
-    if not owner.alive then loading = false loadingScriptId = nil return end
+    -- 下载/编译防连点锁不覆盖原脚本运行期；再次执行不清理已有实例。
+    startedScripts[script.id] = invocation
+    loading, loadingScriptId = false, nil
+    setStatus("运行中：" .. script.nameZh .. "；再次加载将叠加执行")
+    if not owner.alive or token ~= activeToken then return end
+    if os.clock() >= leaseUntil then terminate("运行租约已到期") return end
     local ok = pcall(fn)
-    if not ok then
-        startedScripts[script.id] = "error"
-        if owner.alive then setStatus("脚本启动异常，授权监控继续；可再次点击重试") end
-    elseif owner.alive then
-        startedScripts[script.id] = "running"
-        setStatus("运行中：" .. script.nameZh .. "；可再次点击重载或加载其他脚本")
+    if not owner.alive or startedScripts[script.id] ~= invocation then return end
+    invocation.state = ok and "running" or "error"
+    if activeRun == invocation then
+        setStatus(ok and ("运行中：" .. script.nameZh .. "；再次加载会额外执行一份，不清理已有实例")
+            or "脚本启动异常，授权监控继续；可再次点击重试")
+    else
+        refreshView()
     end
-    loading = false
-    loadingScriptId = nil
-    refreshView()
 end
 
 -- UI 的资源作用域仅属于这一轮视图；销毁它不会改变授权控制器。
@@ -689,7 +690,8 @@ local function buildView(uiContext)
                 parts.action.BackgroundColor3 = colors.surfaceElevated
                 parts.actionStroke.Color = colors.border
             else
-                local runState = startedScripts[script.id]
+                local latestRun = startedScripts[script.id]
+                local runState = latestRun and latestRun.state
                 local isLoadingThis = loading and loadingScriptId == script.id
                 local isBlocked = not script.enabled or notGranted(script)
                 local isRunning = not isBlocked and not isLoadingThis and verified and runState == "running"
