@@ -160,8 +160,14 @@ local function fixture(options)
     local entry={id="hall-7",gameId="demo",nameZh="授权检查",nameEn="Check",enabled=true,universal=false,lifecycle="managed",placeIds={2},universeIds={1},tags={},aliases={},scenario="授权连接 / 状态检查",shortDescription="不应显示这段简介"}
     if options.fallbackApi then environment.FALLBACK_API = options.fallbackApi end
     counter.urls = {}
+    counter.requests = {}
     environment.request=function(args)
         table.insert(counter.urls, args.Url)
+        table.insert(counter.requests, args)
+        if options.transport then
+            local response = options.transport(args)
+            if response then return response end
+        end
         if options.primaryNetworkDown and (not options.fallbackApi or args.Url:find(options.fallbackApi, 1, true) ~= 1) then
             return { StatusCode = 0, Body = "" }
         end
@@ -1249,6 +1255,65 @@ check("主入口网络不可达时自动切换海外 Cloudflare 备用入口并�
         if url:find("/load",1,true) then loadUrl=url end
     end
     assert(loadUrl and loadUrl:find(fallback,1,true)==1,"切换成功后后续加载直走可用备用入口")
+end)
+local edge = "https://zs-hub-api.zs-hub-edge.workers.dev"
+local function isEdge(args) return args.Url:find(edge, 1, true) == 1 end
+check("入口返回 HTML 错误页时回退，明确授权错误不跨线路重试",function()
+    local f=fixture({fallbackApi=edge,transport=function(args)
+        if not isEdge(args) then return {StatusCode=403,Body="<html>edge denied</html>"} end
+    end})
+    untilTrue(function()return f.counter.logins==1 and f.counter.catalogs==1 end)
+    f.play();untilTrue(function()return f.counter.starts==1 end)
+    assert(isEdge(f.counter.requests[#f.counter.requests]))
+    local attempts=0
+    local denied=fixture({fallbackApi=edge,transport=function(args)
+        if args.Url:find("/sessions",1,true) and args.Method=="POST" then
+            attempts+=1
+            return {StatusCode=401,Body=serde.encode("json",{success=false,error={code="HUB_KEY_INVALID"}})}
+        end
+    end})
+    assert(attempts==1 and denied.find("Key 无效") and #denied.counter.kicks==0)
+end)
+check("429 不换线路或自动重试，保留明确的限流提示",function()
+    local attempts=0
+    local f=fixture({fallbackApi=edge,transport=function(args)
+        if args.Url:find("/sessions",1,true) and args.Method=="POST" then
+            attempts+=1
+            return {StatusCode=429,Body="too many requests"}
+        end
+    end})
+    task.wait(0.1)
+    assert(attempts==1 and f.find("请求过于频繁") and f.counter.logins==0 and #f.counter.kicks==0)
+end)
+check("双线路合计20秒预算且登录重试复用同一请求ID",function()
+    local calls={}
+    local f=fixture({noKey=true,fallbackApi=edge,transport=function(args)
+        if args.Url:find("/sessions",1,true) and args.Method=="POST" then
+            table.insert(calls,args)
+            task.wait(3)
+            return {StatusCode=0,Body=""}
+        end
+    end})
+    f.owner.submitKey("RSH_"..string.rep("a",43))
+    untilTrue(function()return #calls==1 end)
+    f.advanceClock(12.1);untilTrue(function()return #calls==2 end)
+    assert(isEdge(calls[2]))
+    f.advanceClock(7);task.wait(0.08);assert(#calls==2)
+    f.advanceClock(1.1);untilTrue(function()return #calls>=3 end)
+    assert(serde.decode("json",calls[1].Body).requestId==serde.decode("json",calls[3].Body).requestId)
+end)
+check("登录成功与目录在途失败交错后补取目录",function()
+    local catalogAttempts=0
+    local f=fixture({fallbackApi=edge,transport=function(args)
+        if args.Url:find("/catalog",1,true) then
+            catalogAttempts+=1
+            if catalogAttempts<=2 then task.wait(0.15);return {StatusCode=503,Body=""} end
+        elseif args.Url:find("/sessions",1,true) and args.Method=="POST" then
+            task.wait(0.02)
+        end
+    end})
+    untilTrue(function()return f.counter.catalogs==1 end)
+    assert(catalogAttempts==3 and f.counter.logins==1 and f.find("授权有效"))
 end)
 print("通过："..passed.." 项界面/监控解耦、原样加载、授权失效断开与竞态回归；Kick 为本地替身")
 

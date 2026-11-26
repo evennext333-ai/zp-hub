@@ -51,8 +51,10 @@ def obfuscate(loader, tool, lua):
     generated.replace(loader)
 
 
-def build(api, output, prometheus_dir=None, lua="lua5.1", fallback_api=DEFAULT_FALLBACK_API_URL):
+def build(api, output, prometheus_dir=None, lua="lua5.1", fallback_api=None):
     api = api_url(api)
+    if fallback_api is None:
+        fallback_api = DEFAULT_FALLBACK_API_URL if api == api_url(DEFAULT_API_URL) else ""
     fallback = api_url(fallback_api) if fallback_api else ""
     if fallback == api:
         fallback = ""
@@ -97,7 +99,7 @@ def build(api, output, prometheus_dir=None, lua="lua5.1", fallback_api=DEFAULT_F
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--api-url", default=DEFAULT_API_URL)
-    parser.add_argument("--fallback-api-url", default=DEFAULT_FALLBACK_API_URL)
+    parser.add_argument("--fallback-api-url", help="海外备用入口；自定义主 API 默认不启用备用")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--prometheus-dir", type=Path)
     parser.add_argument("--lua-bin", default="lua5.1")

@@ -63,6 +63,26 @@ class BuildTests(unittest.TestCase):
             self.assertFalse(output.exists())
             self.assertEqual(list(Path(directory).iterdir()), [])
 
+    def test_fallback_can_be_disabled_or_deduplicated_and_rejects_unsafe_urls(self):
+        for fallback in ("", build.DEFAULT_API_URL):
+            with self.subTest(fallback=fallback), tempfile.TemporaryDirectory() as directory:
+                output = Path(directory) / "bundle"
+                metadata = build.build(build.DEFAULT_API_URL, output, fallback_api=fallback)
+                self.assertNotIn("fallbackApi", metadata)
+                self.assertNotIn("local FALLBACK_API =", (output / "loader.lua").read_text())
+        with tempfile.TemporaryDirectory() as directory, self.assertRaises(ValueError):
+            build.build(build.DEFAULT_API_URL, Path(directory) / "bundle", fallback_api="http://example.com")
+
+    def test_custom_api_never_implicitly_sends_credentials_to_production_fallback(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "custom"
+            metadata = build.build("https://staging.example/api", output)
+            self.assertNotIn("fallbackApi", metadata)
+            self.assertNotIn(build.DEFAULT_FALLBACK_API_URL, (output / "loader.lua").read_text())
+            explicit = build.build("https://staging.example", Path(directory) / "explicit",
+                                   fallback_api="https://edge.example/api/")
+            self.assertEqual(explicit["fallbackApi"], "https://edge.example")
+
     def test_lua_literal_handles_closing_delimiters(self):
         self.assertEqual(build.lua_literal("a]]b"), "[=[a]]b]=]")
 

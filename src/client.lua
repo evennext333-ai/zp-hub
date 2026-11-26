@@ -1,4 +1,4 @@
--- API 与 Runtime 由离线构建注入；首版只有一个国内 API。
+-- API、备用入口与 Runtime 由离线构建注入。
 local env = (type(getgenv) == "function" and getgenv()) or _G
 local pendingKey = type(env.HUB_KEY) == "string" and env.HUB_KEY:match("^%s*(.-)%s*$") or ""
 env.HUB_KEY = nil
@@ -39,6 +39,7 @@ local errors = {
     HUB_GAME_NOT_MATCHED = "此 Key 与当前游戏或地图不匹配", HUB_GAME_NOT_GRANTED = "此 Key 未包含该游戏",
     HUB_SCRIPT_UNAVAILABLE = "脚本尚未上架", HUB_KEY_EXISTS = "已有 Key，遗失后请在领取页重置",
     NETWORK_ERROR = "网络暂时异常", INVALID_RESPONSE = "服务响应异常",
+    RATE_LIMIT_EXCEEDED = "请求过于频繁，请稍后重试",
 }
 local function errorText(code) return errors[code] or tostring(code or "未知错误") end
 local authorizationErrors = {
@@ -75,7 +76,7 @@ end
 
 local activeApi = API
 local fallbackApi = (type(FALLBACK_API) == "string" and FALLBACK_API ~= "" and FALLBACK_API ~= API) and FALLBACK_API or nil
-local catalogBusy = false
+local catalogBusy, catalogRetry = false, false
 local loadCatalog
 
 local function sendRequest(baseUrl, method, path, body, bearer, allowClosed, timeoutSeconds)
@@ -98,7 +99,8 @@ local function sendRequest(baseUrl, method, path, body, bearer, allowClosed, tim
     end
     if not response then return nil, "NETWORK_ERROR", started end
     local code = tonumber(response.StatusCode or response.Status or response.status_code) or 0
-    if code >= 500 or code == 429 or code == 0 then return nil, "NETWORK_ERROR", started end
+    if code == 429 then return nil, "RATE_LIMIT_EXCEEDED", started end
+    if code >= 500 or code == 0 then return nil, "NETWORK_ERROR", started end
     local ok, decoded = pcall(Http.JSONDecode, Http, response.Body or response.body or "")
     if not ok or type(decoded) ~= "table" then return nil, "INVALID_RESPONSE", started end
     if code >= 200 and code < 300 and decoded.success == true then return decoded.data, nil, started end
@@ -106,15 +108,17 @@ local function sendRequest(baseUrl, method, path, body, bearer, allowClosed, tim
 end
 
 local function api(method, path, body, bearer, allowClosed)
-    local current = activeApi
-    local primaryTimeout = fallbackApi and 12 or 20
-    local data, err, sent = sendRequest(current, method, path, body, bearer, allowClosed, primaryTimeout)
-    if err == "NETWORK_ERROR" and fallbackApi and (owner.alive or allowClosed) then
-        local alternate = (current == API) and fallbackApi or API
-        local altData, altErr, altSent = sendRequest(alternate, method, path, body, bearer, allowClosed, 15)
-        if altErr ~= "NETWORK_ERROR" then
-            activeApi = alternate
-            return altData, altErr, altSent
+    local current, started = activeApi, os.clock()
+    local data, err, sent = sendRequest(current, method, path, body, bearer, allowClosed, fallbackApi and 12 or 20)
+    if (err == "NETWORK_ERROR" or err == "INVALID_RESPONSE") and fallbackApi and (owner.alive or allowClosed) then
+        local remaining = 20 - (os.clock() - started)
+        if remaining > 0 then
+            local alternate = (current == API) and fallbackApi or API
+            local altData, altErr, altSent = sendRequest(alternate, method, path, body, bearer, allowClosed, remaining)
+            if altData then activeApi = alternate end
+            if altErr ~= "NETWORK_ERROR" and altErr ~= "INVALID_RESPONSE" then
+                return altData, altErr, altSent
+            end
         end
     end
     return data, err, sent
@@ -1152,8 +1156,9 @@ task.spawn(function()
     end
 end)
 loadCatalog = function()
-    if catalogBusy or not owner.alive then return end
-    catalogBusy = true
+    if not owner.alive then return end
+    if catalogBusy then catalogRetry = true return end
+    catalogBusy, catalogRetry = true, false
     local data, err = api("GET", "/api/hub/catalog")
     catalogBusy = false
     if not owner.alive then return end
@@ -1169,6 +1174,7 @@ loadCatalog = function()
     elseif #catalog == 0 and not token then
         setStatus("目录下载失败：" .. errorText(err))
     end
+    if catalogRetry and #catalog == 0 then task.spawn(loadCatalog) end
 end
 mountUI()
 if pendingKey ~= "" then owner.submitKey(pendingKey) end
