@@ -61,6 +61,9 @@ function Runtime.search(scripts, query, universeId, placeId)
     table.sort(result, function(a, b)
         local ar, br = Runtime.rank(a, universeId, placeId), Runtime.rank(b, universeId, placeId)
         if ar ~= br then return ar < br end
+        local al = math.max(0, math.floor(tonumber(a.loadCount) or 0))
+        local bl = math.max(0, math.floor(tonumber(b.loadCount) or 0))
+        if al ~= bl then return al > bl end
         return a.id < b.id
     end)
     return result
@@ -70,6 +73,16 @@ end
 function Runtime.loadCountText(count)
     local n = math.max(0, math.floor(tonumber(count) or 0))
     return "已执行 " .. tostring(n) .. " 次"
+end
+
+-- 紧凑格式化执行次数，供全部游戏卡片热门趋势展示
+function Runtime.compactCount(count)
+    local n = math.max(0, math.floor(tonumber(count) or 0))
+    if n >= 10000 then
+        local text = string.format("%.1f", n / 10000):gsub("%.0$", "")
+        return text .. "万"
+    end
+    return tostring(n)
 end
 
 -- 格式化脚本是否需要 Key（原脚本自带卡密）的标识文案
@@ -83,6 +96,7 @@ function Runtime.gameGroups(scripts, universeId, placeId, query)
     local currentGame = Runtime.currentGame(scripts, universeId, placeId)
     local currentGid = currentGame and currentGame.id or nil
     local currentScripts, universalScripts = {}, {}
+    local currentLoadCount = 0
     local byGame, order = {}, {}
     local sorted = Runtime.search(scripts or {}, "", universeId, placeId)
     for _, script in ipairs(sorted) do
@@ -93,6 +107,7 @@ function Runtime.gameGroups(scripts, universeId, placeId, query)
             if not currentGid and type(script.gameId) == "string" and script.gameId ~= "" then
                 currentGid = script.gameId
             end
+            currentLoadCount = currentLoadCount + math.max(0, math.floor(tonumber(script.loadCount) or 0))
             table.insert(currentScripts, script)
         end
     end
@@ -112,16 +127,22 @@ function Runtime.gameGroups(scripts, universeId, placeId, query)
                         nameEn = (type(g.nameEn) == "string" and g.nameEn ~= "" and g.nameEn) or "英文名称未配置",
                         universeId = uId,
                         isCurrent = false,
+                        totalLoadCount = 0,
                         scripts = {},
                     }
                     byGame[gid] = group
                     table.insert(order, group)
                 end
+                group.totalLoadCount = group.totalLoadCount + math.max(0, math.floor(tonumber(script.loadCount) or 0))
                 table.insert(group.scripts, script)
             end
         end
     end
-    table.sort(order, function(a, b) return tostring(a.gameId) < tostring(b.gameId) end)
+    table.sort(order, function(a, b)
+        local ac, bc = a.totalLoadCount or 0, b.totalLoadCount or 0
+        if ac ~= bc then return ac > bc end
+        return tostring(a.gameId) < tostring(b.gameId)
+    end)
     local currentEntry = {
         key = "current",
         gameId = currentGid,
@@ -129,9 +150,23 @@ function Runtime.gameGroups(scripts, universeId, placeId, query)
         nameEn = currentGame and ((type(currentGame.nameEn) == "string" and currentGame.nameEn ~= "" and currentGame.nameEn) or "英文名称未配置") or "游戏资料待同步",
         universeId = tonumber(universeId) or 0,
         isCurrent = true,
+        totalLoadCount = currentLoadCount,
         scripts = currentScripts,
         universalScripts = universalScripts,
     }
+    local hotCandidates = {}
+    if currentEntry.totalLoadCount > 0 then table.insert(hotCandidates, currentEntry) end
+    for _, group in ipairs(order) do
+        if group.totalLoadCount > 0 then table.insert(hotCandidates, group) end
+    end
+    table.sort(hotCandidates, function(a, b)
+        if a.totalLoadCount ~= b.totalLoadCount then return a.totalLoadCount > b.totalLoadCount end
+        if a.isCurrent ~= b.isCurrent then return a.isCurrent end
+        return tostring(a.gameId or "") < tostring(b.gameId or "")
+    end)
+    for rankIndex, grp in ipairs(hotCandidates) do
+        grp.hotRank = rankIndex
+    end
     local q = string.lower((type(query) == "string" and query or ""):match("^%s*(.-)%s*$"))
     local function groupMatches(grp)
         if q == "" then return true end
@@ -195,8 +230,8 @@ function Runtime.layout(availableWidth, availableHeight, count, universalCount, 
     local gameCardHeight = compact and 112 or 124
     local gameRows = math.ceil(gameNavCount / columns)
     local galleryTop = mainTop + navBarHeight + 8
-    local galleryHeight = footerY - galleryTop - 10
-    local galleryContentHeight = gameRows > 0 and (gameRows * gameCardHeight + (gameRows - 1) * gap + 8) or 56
+    local galleryHeight = compact and (height - galleryTop - 10) or (footerY - galleryTop - 6)
+    local galleryContentHeight = gameRows > 0 and (gameRows * gameCardHeight + (gameRows - 1) * gap + 24) or 56
     return { width = width, height = height, scale = scale, pad = pad, gap = gap,
         cardHeight = cardHeight, compact = compact, left = left, mainWidth = mainWidth,
         mainTop = mainTop, navBarHeight = navBarHeight, detailTop = detailTop, detailHeight = detailHeight,

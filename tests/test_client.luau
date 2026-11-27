@@ -17,7 +17,7 @@ end
 local function fixture(options)
     options = options or {}
     local objects, threads = {}, {}
-    local counter = {logins=0, loads=0, heartbeats=0, deletes=0, loadIds={}, catalogs=0, guiLookups=0, starts=0, cleanups=0, kicks={}, warnings={}, sources={}}
+    local counter = {logins=0, loads=0, heartbeats=0, deletes=0, loadIds={}, catalogs=0, guiLookups=0, starts=0, cleanups=0, kicks={}, warnings={}, sources={}, openedUrls={}, copiedTexts={}}
     local server = {deniedParents=options.deniedParents,guiUnavailable=options.guiUnavailable,nowMillis=datetime.fromIsoDate("2027-04-08T16:00:00Z").unixTimestampMillis,source=options.source or originalSource, lease=options.lease or 300,
         delayLogin=options.delayLogin or 0, delayLoad=options.delayLoad or 0,
         delayHeartbeat=options.delayHeartbeat or 0, loginError=options.loginError,
@@ -58,7 +58,7 @@ local function fixture(options)
                         if server.deniedParents and server.deniedParents[value.Name] then error("fixture parent permission denied") end
                     end
                     native.Parent=type(value)=="table" and value.native or nil
-                elseif key~="AbsolutePosition" and key~="AbsoluteSize" and key~="destroyed" then
+                elseif key~="AbsolutePosition" and key~="AbsoluteSize" and key~="AbsoluteContentSize" and key~="destroyed" then
                     local ok,err=pcall(function()native[key]=value end)
                     assert(ok,"无效 Roblox 属性："..class.."."..key.." / "..tostring(err))
                 end
@@ -151,6 +151,33 @@ local function fixture(options)
         local coreContainer = {Name="CoreGui",ClassName="CoreGui",fixtureParent=true}
         services.CoreGui = coreContainer
         environment.coreContainer = coreContainer
+    end
+    if options.withOpenBrowser then
+        environment.openbrowser = function(url)
+            if options.openBrowserFails then error("fixture openbrowser failure") end
+            table.insert(counter.openedUrls, "openbrowser:" .. tostring(url))
+        end
+    end
+    if options.withGuiService then
+        services.GuiService = {
+            OpenBrowserWindow = function(_, url)
+                if options.guiServiceFails then error("fixture GuiService denied") end
+                table.insert(counter.openedUrls, "GuiService:" .. tostring(url))
+            end,
+        }
+    end
+    if options.withLinkingService then
+        services.LinkingService = {
+            OpenUrl = function(_, url)
+                if options.linkingServiceFails then error("fixture LinkingService denied") end
+                table.insert(counter.openedUrls, "LinkingService:" .. tostring(url))
+            end,
+        }
+    end
+    if options.withClipboard then
+        environment.setclipboard = function(value)
+            table.insert(counter.copiedTexts, tostring(value))
+        end
     end
     if options.alternateHwid then environment.getexecutorhwid=environment.gethwid end
     if options.noHwid or options.alternateHwid then environment.gethwid=nil end
@@ -693,7 +720,7 @@ check("按钮中心锚点的偏移回归",function()
     local f=fixture({centeredButtons=true})
     for _,size in ipairs({{700,340},{793,351},{1040,720}})do
         f.resize(size[1],size[2])
-        for _,name in ipairs({"ValidateKey","CloseView","CollapseView","EndSession"})do
+        for _,name in ipairs({"ValidateKey","CloseView","CollapseView","EndSession","BuyScripts"})do
             local item=f.byName(name)
             assert(item.AnchorPoint==rb.Vector2.new(0,0),"位置按左上角计算，必须显式重置锚点："..name)
         end
@@ -735,9 +762,13 @@ check("PC、平板、手机及横屏布局与触控区域",function()
         assert(grid.CellSize.X.Offset>0 and grid.CellSize.Y.Offset==layout.cardHeight)
         local stop=f.byName("EndSession")
         assert(list.Position.Y.Offset+list.Size.Y.Offset<=stop.Position.Y.Offset or list.Position.X.Offset>=stop.Position.X.Offset+stop.Size.X.Offset,"卡片不覆盖结束按钮")
-        for _,name in ipairs({"ValidateKey","CloseView","CollapseView","EndSession","ToggleHub","TabCurrentGame","TabAllGames","GameSearchInput"}) do
+        for _,name in ipairs({"ValidateKey","CloseView","CollapseView","EndSession","BuyScripts","ToggleHub","TabCurrentGame","TabAllGames","GameSearchInput"}) do
             assert(f.byName(name).Size.Y.Offset>=44,"触控目标至少44px："..name)
         end
+        local auth,buy=f.byName("Authorization"),f.byName("BuyScripts")
+        assert(auth.Position.Y.Offset+auth.Size.Y.Offset+8<=buy.Position.Y.Offset,"购买按钮与授权卡片保持间距")
+        assert(buy.Position.Y.Offset+buy.Size.Y.Offset<=stop.Position.Y.Offset or buy.Position.X.Offset+buy.Size.X.Offset<=stop.Position.X.Offset,"购买按钮与结束本局按钮不重叠")
+        assert(buy.Position.X.Offset+buy.Size.X.Offset<=list.Position.X.Offset,"购买按钮仅位于左侧栏，不侵入主列表")
         local footer=f.byName("EndSession")
         local bottom=footer.Position.Y.Offset+footer.Size.Y.Offset
         assert(bottom<=layout.height)
@@ -868,9 +899,25 @@ check("游戏画廊双语标题、图片和底栏在三端边界内分离",funct
         end
         local list=f.byName("GameNavList")
         local rows=math.ceil(21/3)
-        assert(list.CanvasSize.Y.Offset>=rows*cell.Y.Offset+(rows-1)*12,"末行画廊卡片滚动范围完整")
+        assert(list.CanvasSize.Y.Offset>=rows*cell.Y.Offset+(rows-1)*12+24,"末行画廊卡片滚动范围及底部留白完整")
         assert(list.Size.Y.Offset>=cell.Y.Offset+4,"至少一排游戏卡片完整可见")
+        local window,footer,stop=f.byName("HubWindow"),f.byName("FooterNote"),f.byName("EndSession")
+        assert(list.Position.Y.Offset+list.Size.Y.Offset<=window.Size.Y.Offset-8,"全部游戏画廊不超出窗口底部")
+        if footer.Visible then
+            assert(list.Position.Y.Offset+list.Size.Y.Offset<=footer.Position.Y.Offset,"桌面端画廊不覆盖底栏说明")
+            assert(list.Position.Y.Offset+list.Size.Y.Offset<=stop.Position.Y.Offset,"桌面端画廊不覆盖结束按钮")
+        else
+            assert(list.Size.Y.Offset>=2*cell.Y.Offset+12+4,"紧凑端画廊完整展示两排卡片不裁切下边")
+        end
     end
+    -- 验证真实 Roblox UIGridLayout.AbsoluteContentSize 超过理论值时动态扩展画廊滚动高度
+    f.resize(793,311)
+    local galleryGrid=f.byName("GameGalleryLayout")
+    local navList=f.byName("GameNavList")
+    local beforeCanvas=navList.CanvasSize.Y.Offset
+    galleryGrid.AbsoluteContentSize=rb.Vector2.new(400,2000)
+    galleryGrid:GetPropertyChangedSignal("AbsoluteContentSize"):Fire()
+    assert(navList.CanvasSize.Y.Offset>beforeCanvas and f.byName("GameCardsContainer").Size.Y.Offset==navList.CanvasSize.Y.Offset,"按实际内容高度同步画廊滚动范围")
     assert(f.counter.logins==0 and f.counter.loads==0,"浏览画廊和调整尺寸只读元数据")
 end)
 check("ZS 品牌与 f0644b 主题色保持一致",function()
@@ -1375,6 +1422,69 @@ check("登录成功与目录在途失败交错后补取目录",function()
     end})
     untilTrue(function()return f.counter.catalogs==1 end)
     assert(catalogAttempts==3 and f.counter.logins==1 and f.find("授权有效"))
+end)
+check("官网购买按钮自动调用浏览器并兼容多执行器与剪贴板回退",function()
+    local targetUrl="https://www.zldelf.cloud/scripts"
+    local f1=fixture({noKey=true,withOpenBrowser=true,withClipboard=true})
+    assert(f1.byName("BuyScripts").Visible and f1.byName("BuyScripts").Text:find("官网购买",1,true))
+    f1.byName("BuyScripts").Activated:Fire()
+    assert(#f1.counter.openedUrls==1 and f1.counter.openedUrls[1]=="openbrowser:"..targetUrl)
+    assert(#f1.counter.copiedTexts==1 and f1.counter.copiedTexts[1]==targetUrl)
+    assert(f1.byName("BuyScripts").Text:find("已打开官网",1,true))
+    assert(f1.counter.logins==0 and f1.counter.loads==0 and #f1.counter.kicks==0)
+    local f2=fixture({noKey=true,withGuiService=true})
+    f2.byName("BuyScripts").Activated:Fire()
+    assert(#f2.counter.openedUrls==1 and f2.counter.openedUrls[1]=="GuiService:"..targetUrl)
+    assert(f2.byName("BuyScripts").Text:find("已打开官网",1,true))
+    local f3=fixture({noKey=true,withGuiService=true,guiServiceFails=true,withClipboard=true})
+    f3.byName("BuyScripts").Activated:Fire()
+    assert(#f3.counter.openedUrls==0 and #f3.counter.copiedTexts==1 and f3.counter.copiedTexts[1]==targetUrl)
+    assert(f3.byName("BuyScripts").Text:find("已复制",1,true) and f3.byName("SessionStatus").Text:find(targetUrl,1,true))
+    local f4=fixture({noKey=true})
+    f4.byName("BuyScripts").Activated:Fire()
+    assert(#f4.counter.openedUrls==0 and #f4.counter.copiedTexts==0 and f4.byName("SessionStatus").Text:find(targetUrl,1,true))
+    assert(f4.counter.logins==0 and f4.counter.loads==0 and #f4.counter.kicks==0)
+end)
+check("全部游戏按累计执行次数排列热门趋势并展示 TOP 徽章",function()
+    local scripts={
+        {id="hall-7",gameId="cur-game",nameZh="当前脚本",nameEn="Cur",enabled=true,placeIds={2},universeIds={1},loadCount=15,
+            game={id="cur-game",nameZh="当前游戏",nameEn="Current Game"}},
+        {id="hall-11",gameId="cold",nameZh="冷门脚本",nameEn="Cold",enabled=true,placeIds={11},universeIds={11},loadCount=3,
+            game={id="cold",nameZh="冷门游戏",nameEn="Cold Game"}},
+        {id="hall-12",gameId="hot-top",nameZh="热门脚本1",nameEn="Hot1",enabled=true,placeIds={12},universeIds={12},loadCount=120,
+            game={id="hot-top",nameZh="最热游戏",nameEn="Top Hot"}},
+        {id="hall-13",gameId="hot-top",nameZh="热门脚本2",nameEn="Hot2",enabled=true,placeIds={12},universeIds={12},loadCount=80,
+            game={id="hot-top",nameZh="最热游戏",nameEn="Top Hot"}},
+        {id="hall-14",gameId="hot-mid",nameZh="次热脚本",nameEn="Mid",enabled=true,placeIds={14},universeIds={14},loadCount=95,
+            game={id="hot-mid",nameZh="次热游戏",nameEn="Mid Hot"}},
+        {id="hall-15",gameId="zero",nameZh="零次脚本",nameEn="Zero",enabled=true,placeIds={15},universeIds={15},loadCount=0,
+            game={id="zero",nameZh="零次游戏",nameEn="Zero Game"}},
+    }
+    local f=fixture({catalog=scripts,kind="MEMBER"})
+    f.resize(1040,720)
+    f.byName("TabAllGames").Activated:Fire()
+    local function navPart(navId,partName)
+        local nav=f.byName(navId)
+        for _,o in ipairs(f.objects)do if not o.destroyed and o.Parent==nav and o.Name==partName then return o end end
+        error("导航子控件缺失："..navId.."."..partName)
+    end
+    assert(f.byName("GameNav_current").LayoutOrder==1,"当前游戏固定排在首位")
+    assert(f.byName("GameNav_hot-top").LayoutOrder==2,"累计 200 次的最热游戏排在第二位")
+    assert(f.byName("GameNav_hot-mid").LayoutOrder==3,"95 次的次热游戏排在第三位")
+    assert(f.byName("GameNav_cold").LayoutOrder==4,"3 次的冷门游戏排在第四位")
+    assert(f.byName("GameNav_zero").LayoutOrder==5,"0 次游戏排在末尾")
+    local accent=rb.Color3.fromRGB(240,100,75)
+    assert(navPart("GameNav_hot-top","NavBadge").Text=="🔥 热门 #1" and navPart("GameNav_hot-top","NavBadge").TextColor3==accent)
+    assert(navPart("GameNav_hot-mid","NavBadge").Text=="🔥 热门 #2" and navPart("GameNav_hot-mid","NavBadge").TextColor3==accent)
+    assert(navPart("GameNav_cold","NavBadge").Text=="支持游戏")
+    assert(navPart("GameNav_hot-top","NavSub").Text:find("200",1,true) and navPart("GameNav_hot-top","NavSub").Text:find("🔥",1,true))
+    assert(navPart("GameNav_zero","NavSub").Text=="1 个支持脚本")
+    -- 加载一次当前游戏脚本后切回全部游戏，热度和次数实时递增
+    f.byName("TabCurrentGame").Activated:Fire()
+    f.byName("ScriptCard_hall-7").Activated:Fire()
+    untilTrue(function()return f.counter.starts==1 end)
+    f.byName("TabAllGames").Activated:Fire()
+    assert(navPart("GameNav_current","NavSub").Text:find("16",1,true),"执行后返回全部游戏立即反映最新次数")
 end)
 print("通过："..passed.." 项界面/监控解耦、原样加载、授权失效断开与竞态回归；Kick 为本地替身")
 

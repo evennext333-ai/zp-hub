@@ -66,6 +66,13 @@ assert(Runtime.scenario({shortDescription="不要展示简介"}) == "场景信�
 assert(Runtime.loadCountText(nil) == "已执行 0 次")
 assert(Runtime.loadCountText(15) == "已执行 15 次")
 assert(Runtime.loadCountText(-3) == "已执行 0 次")
+assert(Runtime.compactCount(nil) == "0")
+assert(Runtime.compactCount(-5) == "0")
+assert(Runtime.compactCount(42) == "42")
+assert(Runtime.compactCount(9999) == "9999")
+assert(Runtime.compactCount(10000) == "1万")
+assert(Runtime.compactCount(12500) == "1.2万" or Runtime.compactCount(12500) == "1.3万")
+assert(Runtime.compactCount(20000) == "2万")
 assert(Runtime.keyBadgeText({requiresKey = true}) == "🔑 需Key")
 assert(Runtime.keyBadgeText({requiresKey = false}) == "免Key")
 assert(Runtime.keyBadgeText({}) == "卡密待同步")
@@ -79,6 +86,28 @@ local groups, currentGroup = Runtime.gameGroups({
 assert(#groups == 2 and groups[1] == currentGroup and currentGroup.isCurrent)
 assert(currentGroup.nameZh == "当前游戏Alpha" and #currentGroup.scripts == 1 and #currentGroup.universalScripts == 1)
 assert(groups[2].gameId == "beta" and not groups[2].isCurrent and groups[2].nameZh == "其他游戏Beta" and #groups[2].scripts == 1)
+local hotGroups, hotCurrent = Runtime.gameGroups({
+    {id="g-a1", gameId="game-a", nameZh="A1", nameEn="A1", loadCount=5, placeIds={}, universeIds={101}, game={id="game-a", nameZh="冷门游戏", nameEn="Cold"}},
+    {id="g-c1", gameId="game-c", nameZh="C1", nameEn="C1", loadCount=60, placeIds={}, universeIds={103}, game={id="game-c", nameZh="爆火游戏", nameEn="Hot"}},
+    {id="g-c2", gameId="game-c", nameZh="C2", nameEn="C2", loadCount=90, placeIds={}, universeIds={103}, game={id="game-c", nameZh="爆火游戏", nameEn="Hot"}},
+    {id="g-b1", gameId="game-b", nameZh="B1", nameEn="B1", loadCount=80, placeIds={}, universeIds={102}, game={id="game-b", nameZh="次热游戏", nameEn="Warm"}},
+    {id="g-z1", gameId="game-z", nameZh="Z1", nameEn="Z1", loadCount=0, placeIds={}, universeIds={104}, game={id="game-z", nameZh="零次游戏", nameEn="Zero"}},
+    {id="cur-a", gameId="cur", nameZh="当前脚本", nameEn="Cur", loadCount=12, placeIds={10}, universeIds={1}, game={id="cur", nameZh="当前游戏", nameEn="Current"}},
+}, 1, 10)
+assert(hotGroups[1] == hotCurrent and hotCurrent.totalLoadCount == 12)
+assert(hotGroups[2].gameId == "game-c" and hotGroups[2].totalLoadCount == 150 and hotGroups[2].hotRank == 1)
+assert(hotGroups[2].scripts[1].id == "g-c2" and hotGroups[2].scripts[2].id == "g-c1", "同游戏内脚本也按执行次数降序排列")
+assert(hotGroups[3].gameId == "game-b" and hotGroups[3].totalLoadCount == 80 and hotGroups[3].hotRank == 2)
+assert(hotGroups[4].gameId == "game-a" and hotGroups[4].totalLoadCount == 5 and hotGroups[4].hotRank == 4)
+assert(hotGroups[5].gameId == "game-z" and hotGroups[5].totalLoadCount == 0 and hotGroups[5].hotRank == nil)
+assert(hotCurrent.hotRank == 3)
+local compactGallery = Runtime.layout(793, 311, 1, 0, 21, true)
+assert(compactGallery.compact and compactGallery.galleryHeight == compactGallery.height - compactGallery.galleryTop - 10)
+assert(compactGallery.galleryHeight >= 2 * compactGallery.gameCardHeight + compactGallery.gap + 4, "紧凑模式全部游戏至少完整展示两排")
+assert(compactGallery.galleryContentHeight >= 7 * compactGallery.gameCardHeight + 6 * compactGallery.gap + 24)
+local desktopGallery = Runtime.layout(1040, 720, 1, 0, 21, true)
+assert(not desktopGallery.compact and desktopGallery.galleryHeight == desktopGallery.footerY - desktopGallery.galleryTop - 6)
+assert(desktopGallery.galleryContentHeight >= 7 * desktopGallery.gameCardHeight + 6 * desktopGallery.gap + 24)
 local client = fs.readFile("src/client.lua")
 assert(luau.load("local API='https://TARGET'; local Runtime={};\n" .. client))
 print("通过：生命周期、清理异常、晚到资源、搜索排序、租约及 Lua 编译")
