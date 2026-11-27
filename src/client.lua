@@ -82,6 +82,10 @@ local loadCatalog
 local PURCHASE_URL = "https://www.zldelf.cloud/scripts"
 
 local function openPurchaseUrl()
+    local function try(callback)
+        local ok, result = pcall(callback)
+        return ok and result ~= false
+    end
     local opened = false
     local browserFns = {
         [1] = openbrowser, [2] = open_browser, [3] = openurl, [4] = open_url,
@@ -89,26 +93,29 @@ local function openPurchaseUrl()
     }
     for i = 1, 5 do
         local fn = browserFns[i]
-        if type(fn) == "function" then
-            if pcall(fn, PURCHASE_URL) then opened = true break end
+        if type(fn) == "function" and try(function() return fn(PURCHASE_URL) end) then
+            opened = true
+            break
         end
     end
+    -- Service lookup, member access and invocation may each be restricted.
     if not opened then
-        local okSvc, guiService = pcall(function() return game:GetService("GuiService") end)
-        if okSvc and guiService and type(guiService.OpenBrowserWindow) == "function" then
-            if pcall(function() guiService:OpenBrowserWindow(PURCHASE_URL) end) then opened = true end
-        end
+        opened = try(function() return game:GetService("GuiService"):OpenBrowserWindow(PURCHASE_URL) end)
     end
     if not opened then
-        local okSvc, linkingService = pcall(function() return game:GetService("LinkingService") end)
-        if okSvc and linkingService and type(linkingService.OpenUrl) == "function" then
-            if pcall(function() linkingService:OpenUrl(PURCHASE_URL) end) then opened = true end
-        end
+        opened = try(function() return game:GetService("LinkingService"):OpenUrl(PURCHASE_URL) end)
     end
     local copied = false
-    local clipFn = setclipboard or toclipboard or set_clipboard or (type(Clipboard) == "table" and Clipboard.set or nil)
-    if type(clipFn) == "function" then
-        copied = pcall(clipFn, PURCHASE_URL)
+    local clipFns = {
+        [1] = setclipboard, [2] = toclipboard, [3] = set_clipboard,
+        [4] = type(Clipboard) == "table" and Clipboard.set or nil,
+    }
+    for i = 1, 4 do
+        local fn = clipFns[i]
+        if type(fn) == "function" and try(function() return fn(PURCHASE_URL) end) then
+            copied = true
+            break
+        end
     end
     return opened, copied
 end
@@ -1130,6 +1137,7 @@ local function buildView(uiContext)
     local buyFeedbackToken = 0
     bindClick(buyButton, function()
         local opened, copied = openPurchaseUrl()
+        if not uiContext.alive then return end
         buyFeedbackToken += 1
         local currentToken = buyFeedbackToken
         if opened then

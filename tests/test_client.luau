@@ -154,7 +154,9 @@ local function fixture(options)
     end
     if options.withOpenBrowser then
         environment.openbrowser = function(url)
+            if options.delayOpenBrowser then task.wait(options.delayOpenBrowser) end
             if options.openBrowserFails then error("fixture openbrowser failure") end
+            if options.openBrowserReturnsFalse then return false end
             table.insert(counter.openedUrls, "openbrowser:" .. tostring(url))
         end
     end
@@ -174,10 +176,20 @@ local function fixture(options)
             end,
         }
     end
+    if options.deniedBrowserMembers then
+        local denied = setmetatable({}, {__index=function()error("fixture restricted browser member")end})
+        services.GuiService = denied
+        services.LinkingService = denied
+    end
     if options.withClipboard then
         environment.setclipboard = function(value)
+            if options.clipboardReturnsFalse then return false end
             table.insert(counter.copiedTexts, tostring(value))
         end
+    end
+    if options.alternateClipboard then
+        environment.toclipboard = environment.setclipboard
+        environment.setclipboard = true
     end
     if options.alternateHwid then environment.getexecutorhwid=environment.gethwid end
     if options.noHwid or options.alternateHwid then environment.gethwid=nil end
@@ -1444,6 +1456,36 @@ check("官网购买按钮自动调用浏览器并兼容多执行器与剪贴板�
     f4.byName("BuyScripts").Activated:Fire()
     assert(#f4.counter.openedUrls==0 and #f4.counter.copiedTexts==0 and f4.byName("SessionStatus").Text:find(targetUrl,1,true))
     assert(f4.counter.logins==0 and f4.counter.loads==0 and #f4.counter.kicks==0)
+end)
+check("浏览器属性受限仍回退剪贴板且不发起授权或加载",function()
+    local f=fixture({noKey=true,deniedBrowserMembers=true,withClipboard=true})
+    f.byName("BuyScripts").Activated:Fire()
+    assert(#f.counter.copiedTexts==1 and f.byName("BuyScripts").Text:find("已复制",1,true))
+    assert(f.counter.logins==0 and f.counter.loads==0 and #f.counter.kicks==0)
+end)
+check("浏览器和剪贴板显式拒绝不误报成功并兼容有效别名",function()
+    local f=fixture({noKey=true,withOpenBrowser=true,openBrowserReturnsFalse=true,withClipboard=true})
+    f.byName("BuyScripts").Activated:Fire()
+    assert(#f.counter.openedUrls==0 and #f.counter.copiedTexts==1)
+    assert(f.byName("BuyScripts").Text:find("已复制",1,true))
+    local rejected=fixture({noKey=true,withClipboard=true,clipboardReturnsFalse=true})
+    rejected.byName("BuyScripts").Activated:Fire()
+    assert(#rejected.counter.copiedTexts==0 and rejected.byName("BuyScripts").Text=="请访问 zldelf.cloud")
+    local alias=fixture({noKey=true,withClipboard=true,alternateClipboard=true})
+    alias.byName("BuyScripts").Activated:Fire()
+    assert(#alias.counter.copiedTexts==1 and alias.byName("BuyScripts").Text:find("已复制",1,true))
+end)
+check("购买入口等待期间关闭恢复不覆盖新界面的授权提示",function()
+    local f=fixture({noKey=true,withOpenBrowser=true,delayOpenBrowser=0.1})
+    local old=f.byName("BuyScripts")
+    local pending=task.spawn(function()old.Activated:Fire()end)
+    task.wait(0.02);f.close();f.client()
+    local status=f.byName("SessionStatus").Text
+    task.wait(0.15)
+    assert(old.destroyed and old.Text:find("官网购买",1,true),"旧界面销毁后不回写反馈")
+    assert(f.byName("SessionStatus").Text==status,"旧购买回调不覆盖新视图状态")
+    assert(f.owner.alive and #f.counter.kicks==0 and f.counter.logins==0 and f.counter.loads==0)
+    pcall(task.cancel,pending)
 end)
 check("全部游戏按累计执行次数排列热门趋势并展示 TOP 徽章",function()
     local scripts={
